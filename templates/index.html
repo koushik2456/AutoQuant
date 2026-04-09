@@ -1,779 +1,475 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
-    <title>AutoQuant - Smart LLM Quantization</title>
-    <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
-        :root {
-            --bg-primary: #0a0a0f;
-            --bg-secondary: #12121a;
-            --bg-card: #1a1a2a;
-            --bg-hover: #222235;
-            --text-primary: #e0e0e0;
-            --text-secondary: #a0a0b0;
-            --text-tertiary: #707080;
-            --accent: #4a9eff;
-            --accent-glow: #4a9eff33;
-            --success: #00cc66;
-            --warning: #ffaa44;
-            --error: #ff4444;
-            --border: #2a2a3a;
-        }
-
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
-            background: linear-gradient(135deg, var(--bg-primary) 0%, var(--bg-secondary) 100%);
-            color: var(--text-primary);
-            min-height: 100vh;
-            padding: 20px;
-        }
-
-        .container {
-            max-width: 1400px;
-            margin: 0 auto;
-        }
-
-        /* Header */
-        .header {
-            text-align: center;
-            margin-bottom: 40px;
-            padding: 20px;
-        }
-
-        .header h1 {
-            font-size: 2.5rem;
-            background: linear-gradient(135deg, #4a9eff, #9b4aff);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
-            margin-bottom: 10px;
-        }
-
-        .header p {
-            color: var(--text-secondary);
-            font-size: 1rem;
-        }
-
-        .badge {
-            display: inline-block;
-            background: var(--bg-card);
-            padding: 5px 12px;
-            border-radius: 20px;
-            font-size: 0.8rem;
-            margin-top: 10px;
-            border: 1px solid var(--border);
-        }
-
-        /* Grid Layout */
-        .grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 24px;
-            margin-bottom: 24px;
-        }
-
-        @media (max-width: 900px) {
-            .grid {
-                grid-template-columns: 1fr;
-            }
-        }
-
-        /* Cards */
-        .card {
-            background: var(--bg-card);
-            border-radius: 20px;
-            border: 1px solid var(--border);
-            overflow: hidden;
-            backdrop-filter: blur(10px);
-        }
-
-        .card-header {
-            padding: 20px 24px;
-            border-bottom: 1px solid var(--border);
-            background: rgba(0,0,0,0.2);
-        }
-
-        .card-header h2 {
-            font-size: 1.25rem;
-            font-weight: 600;
-        }
-
-        .card-header p {
-            font-size: 0.85rem;
-            color: var(--text-secondary);
-            margin-top: 4px;
-        }
-
-        .card-body {
-            padding: 24px;
-        }
-
-        /* Form Elements */
-        .form-group {
-            margin-bottom: 20px;
-        }
-
-        label {
-            display: block;
-            margin-bottom: 8px;
-            font-size: 0.85rem;
-            font-weight: 500;
-            color: var(--text-secondary);
-        }
-
-        input, select {
-            width: 100%;
-            padding: 12px 16px;
-            background: var(--bg-secondary);
-            border: 1px solid var(--border);
-            border-radius: 12px;
-            color: var(--text-primary);
-            font-size: 0.95rem;
-            transition: all 0.2s;
-        }
-
-        input:focus, select:focus {
-            outline: none;
-            border-color: var(--accent);
-            box-shadow: 0 0 0 3px var(--accent-glow);
-        }
-
-        /* Slider */
-        .slider-container {
-            padding: 10px 0;
-        }
-
-        input[type="range"] {
-            width: 100%;
-            height: 6px;
-            -webkit-appearance: none;
-            background: var(--border);
-            border-radius: 3px;
-            padding: 0;
-        }
-
-        input[type="range"]:focus {
-            outline: none;
-        }
-
-        input[type="range"]::-webkit-slider-thumb {
-            -webkit-appearance: none;
-            width: 20px;
-            height: 20px;
-            background: var(--accent);
-            border-radius: 50%;
-            cursor: pointer;
-            box-shadow: 0 0 10px var(--accent);
-        }
-
-        .budget-value {
-            text-align: center;
-            margin-top: 10px;
-            font-size: 1.2rem;
-            font-weight: 600;
-            color: var(--accent);
-        }
-
-        /* Preset Buttons */
-        .preset-buttons {
-            display: flex;
-            gap: 8px;
-            margin-top: 12px;
-            flex-wrap: wrap;
-        }
-
-        .preset-btn {
-            background: var(--bg-secondary);
-            border: 1px solid var(--border);
-            border-radius: 20px;
-            padding: 6px 12px;
-            font-size: 0.7rem;
-            cursor: pointer;
-            color: var(--text-secondary);
-            transition: all 0.2s;
-        }
-
-        .preset-btn:hover {
-            background: var(--accent);
-            color: white;
-            border-color: var(--accent);
-            transform: translateY(-1px);
-        }
-
-        /* Buttons */
-        .btn {
-            width: 100%;
-            padding: 14px 24px;
-            border: none;
-            border-radius: 12px;
-            font-size: 1rem;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.2s;
-        }
-
-        .btn-primary {
-            background: linear-gradient(135deg, var(--accent), #6c5ce7);
-            color: white;
-        }
-
-        .btn-primary:hover:not(:disabled) {
-            transform: translateY(-2px);
-            box-shadow: 0 10px 20px var(--accent-glow);
-        }
-
-        .btn-primary:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-        }
-
-        .btn-secondary {
-            background: var(--bg-secondary);
-            border: 1px solid var(--border);
-            color: var(--text-primary);
-        }
-
-        .btn-secondary:hover {
-            background: var(--bg-hover);
-            border-color: var(--accent);
-        }
-
-        /* Progress */
-        .progress-container {
-            margin: 20px 0;
-        }
-
-        .progress-bar {
-            height: 8px;
-            background: var(--border);
-            border-radius: 4px;
-            overflow: hidden;
-        }
-
-        .progress-fill {
-            height: 100%;
-            background: linear-gradient(90deg, var(--accent), #6c5ce7);
-            width: 0%;
-            transition: width 0.3s;
-            border-radius: 4px;
-        }
-
-        .progress-text {
-            text-align: center;
-            margin-top: 10px;
-            font-size: 0.85rem;
-            color: var(--text-secondary);
-        }
-
-        /* Log Window */
-        .log-window {
-            background: #0a0a0f;
-            border-radius: 12px;
-            padding: 15px;
-            font-family: 'Courier New', monospace;
-            font-size: 11px;
-            max-height: 300px;
-            overflow-y: auto;
-            white-space: pre-wrap;
-            color: #00ff00;
-            margin-top: 15px;
-        }
-
-        /* Model List */
-        .model-list {
-            max-height: 400px;
-            overflow-y: auto;
-        }
-
-        .model-item {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 16px;
-            background: var(--bg-secondary);
-            border-radius: 12px;
-            margin-bottom: 12px;
-            transition: all 0.2s;
-        }
-
-        .model-item:hover {
-            background: var(--bg-hover);
-            transform: translateX(4px);
-        }
-
-        .model-info h4 {
-            font-size: 1rem;
-            margin-bottom: 4px;
-        }
-
-        .model-info p {
-            font-size: 0.75rem;
-            color: var(--text-tertiary);
-        }
-
-        .model-stats {
-            display: flex;
-            gap: 12px;
-            font-size: 0.75rem;
-            margin-top: 4px;
-        }
-
-        .model-stats span {
-            color: var(--success);
-        }
-
-        .model-actions {
-            display: flex;
-            gap: 8px;
-        }
-
-        .icon-btn {
-            background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            padding: 8px 12px;
-            cursor: pointer;
-            font-size: 1rem;
-            transition: all 0.2s;
-        }
-
-        .icon-btn:hover {
-            background: var(--accent);
-            border-color: var(--accent);
-        }
-
-        /* Status Messages */
-        .status {
-            padding: 12px 16px;
-            border-radius: 12px;
-            margin-top: 16px;
-        }
-
-        .status-success {
-            background: var(--success)22;
-            border: 1px solid var(--success);
-            color: var(--success);
-        }
-
-        .status-error {
-            background: var(--error)22;
-            border: 1px solid var(--error);
-            color: var(--error);
-        }
-
-        .status-info {
-            background: var(--accent)22;
-            border: 1px solid var(--accent);
-            color: var(--accent);
-        }
-
-        /* Model Info Box */
-        .model-info-box {
-            background: var(--bg-secondary);
-            padding: 12px;
-            border-radius: 12px;
-            font-size: 0.85rem;
-            margin-top: 8px;
-        }
-
-        /* Empty State */
-        .empty-state {
-            text-align: center;
-            padding: 40px;
-            color: var(--text-tertiary);
-        }
-
-        /* Loading Spinner */
-        .spinner {
-            display: inline-block;
-            width: 20px;
-            height: 20px;
-            border: 2px solid var(--border);
-            border-top-color: var(--accent);
-            border-radius: 50%;
-            animation: spin 0.8s linear infinite;
-        }
-
-        @keyframes spin {
-            to { transform: rotate(360deg); }
-        }
-
-        /* Scrollbar */
-        ::-webkit-scrollbar {
-            width: 8px;
-            height: 8px;
-        }
-
-        ::-webkit-scrollbar-track {
-            background: var(--bg-secondary);
-            border-radius: 4px;
-        }
-
-        ::-webkit-scrollbar-thumb {
-            background: var(--border);
-            border-radius: 4px;
-        }
-
-        ::-webkit-scrollbar-thumb:hover {
-            background: var(--accent);
-        }
-
-        /* Help Text */
-        .help-text {
-            color: var(--text-tertiary);
-            font-size: 0.7rem;
-            margin-top: 5px;
-            display: block;
-        }
-    </style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AutoQuant — Quantization dashboard</title>
+  <style>
+    :root {
+      --bg: #0c0c12;
+      --surface: #14141f;
+      --card: #1a1a28;
+      --border: #2a2a3c;
+      --text: #e8e8ef;
+      --muted: #9898a8;
+      --accent: #5b8def;
+      --accent-dim: #5b8def33;
+      --ok: #3ecf8e;
+      --warn: #e8b44c;
+      --err: #f07178;
+      --radius: 14px;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: "Segoe UI", system-ui, sans-serif;
+      background: radial-gradient(1200px 600px at 10% -10%, #1a1a40 0%, transparent 55%), var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      line-height: 1.5;
+    }
+    .wrap { max-width: 920px; margin: 0 auto; padding: 28px 20px 48px; }
+    header {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 28px;
+    }
+    h1 {
+      font-size: 1.65rem;
+      font-weight: 650;
+      letter-spacing: -0.02em;
+    }
+    .subtitle { color: var(--muted); font-size: 0.92rem; max-width: 520px; margin-top: 6px; }
+    .gpu-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 14px;
+      border-radius: 999px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      font-size: 0.8rem;
+      color: var(--muted);
+    }
+    .gpu-pill strong { color: var(--text); font-weight: 600; }
+    .gpu-stack { max-width: 380px; text-align: right; }
+    @media (max-width: 640px) { .gpu-stack { text-align: left; max-width: none; } }
+    .gpu-hint {
+      margin-top: 10px;
+      font-size: 0.75rem;
+      color: var(--muted);
+      line-height: 1.45;
+      text-align: left;
+      padding: 10px 12px;
+      background: var(--surface);
+      border-radius: 10px;
+      border: 1px solid var(--border);
+    }
+    .gpu-meta { font-size: 0.72rem; color: var(--text-tertiary, #6a6a78); margin-top: 6px; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+    .dot.on { background: var(--ok); box-shadow: 0 0 10px var(--ok); }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 22px 22px 20px;
+      margin-bottom: 18px;
+    }
+    .card h2 { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin-bottom: 14px; }
+    label { display: block; font-size: 0.82rem; color: var(--muted); margin-bottom: 6px; }
+    input[type="text"], input[type="number"] {
+      width: 100%;
+      padding: 11px 14px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text);
+      font-size: 0.95rem;
+    }
+    input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    @media (max-width: 640px) { .row { grid-template-columns: 1fr; } }
+    input[type="range"] { width: 100%; accent-color: var(--accent); margin-top: 4px; }
+    .budget-readout { font-size: 1.15rem; font-weight: 600; color: var(--accent); margin-top: 6px; }
+    .btn {
+      width: 100%;
+      margin-top: 8px;
+      padding: 13px 18px;
+      border: none;
+      border-radius: 11px;
+      font-size: 0.98rem;
+      font-weight: 600;
+      cursor: pointer;
+      background: linear-gradient(135deg, var(--accent), #7c5cff);
+      color: #fff;
+    }
+    .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+    .steps { display: flex; flex-direction: column; gap: 0; }
+    .step {
+      display: grid;
+      grid-template-columns: 36px 1fr;
+      gap: 12px;
+      padding: 14px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .step:last-child { border-bottom: none; }
+    .step-idx {
+      width: 32px; height: 32px; border-radius: 10px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 0.85rem; font-weight: 700;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--muted);
+    }
+    .step.active .step-idx { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); }
+    .step.done .step-idx { background: var(--ok); border-color: var(--ok); color: #0a0a0f; }
+    .step-title { font-weight: 600; font-size: 0.95rem; }
+    .step-detail { font-size: 0.8rem; color: var(--muted); margin-top: 2px; }
+    .progress-outer {
+      height: 8px; background: var(--surface); border-radius: 6px; overflow: hidden;
+      margin-top: 14px;
+    }
+    .progress-inner {
+      height: 100%; width: 0%;
+      background: linear-gradient(90deg, var(--accent), #9d7aff);
+      border-radius: 6px;
+      transition: width 0.35s ease;
+    }
+    .status-line { margin-top: 10px; font-size: 0.88rem; color: var(--muted); }
+    .status-line strong { color: var(--text); }
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+      margin-top: 16px;
+    }
+    @media (max-width: 640px) { .metrics { grid-template-columns: 1fr; } }
+    .metric {
+      background: var(--surface);
+      border-radius: 11px;
+      padding: 14px 14px 12px;
+      border: 1px solid var(--border);
+    }
+    .metric .k { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+    .metric .v { font-size: 1.25rem; font-weight: 700; margin-top: 4px; }
+    .metric .v small { font-size: 0.75rem; font-weight: 500; color: var(--muted); }
+    .compare {
+      margin-top: 16px;
+      padding: 16px;
+      background: var(--surface);
+      border-radius: 11px;
+      border: 1px solid var(--border);
+    }
+    .compare h3 { font-size: 0.8rem; color: var(--muted); margin-bottom: 10px; }
+    .bar-row { margin-bottom: 10px; }
+    .bar-row span { font-size: 0.78rem; color: var(--muted); display: flex; justify-content: space-between; margin-bottom: 4px; }
+    .bar-bg { height: 22px; border-radius: 8px; background: #0a0a12; overflow: hidden; border: 1px solid var(--border); }
+    .bar-fill { height: 100%; border-radius: 7px; transition: width 0.5s ease; }
+    .bar-fill.fp16 { background: linear-gradient(90deg, #5b8def, #7c9fff); }
+    .bar-fill.q { background: linear-gradient(90deg, #3ecf8e, #5ae0a8); }
+    .callout {
+      margin-top: 14px;
+      padding: 12px 14px;
+      border-radius: 10px;
+      background: #1f1f2e;
+      border-left: 3px solid var(--accent);
+      font-size: 0.84rem;
+      color: var(--muted);
+    }
+    .log {
+      margin-top: 12px;
+      max-height: 200px;
+      overflow-y: auto;
+      font-family: ui-monospace, monospace;
+      font-size: 0.72rem;
+      line-height: 1.45;
+      color: #a8d5a8;
+      background: #08080e;
+      padding: 12px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      white-space: pre-wrap;
+    }
+    .err-banner {
+      margin-top: 12px;
+      padding: 12px 14px;
+      border-radius: 10px;
+      background: #2a1518;
+      border: 1px solid var(--err);
+      color: #ffb4b8;
+      font-size: 0.88rem;
+    }
+  </style>
 </head>
 <body>
-    <div class="container">
-        <div class="header">
-            <h1>🔢 AutoQuant</h1>
-            <p>Automated Mixed-Precision Quantization for LLMs</p>
-            <div class="badge">⚡ 4 Metrics • 🎯 Optimal Allocation • 💾 Efficient</div>
+  <div class="wrap">
+    <header>
+      <div>
+        <h1>AutoQuant dashboard</h1>
+        <p class="subtitle">
+          Step through loading, sensitivity profiling, bit allocation, and weight packing.
+          <strong style="color:var(--text)">Parameter count stays the same</strong> — quantization
+          shrinks <em>memory</em> by storing weights in fewer bits (INT4/8 vs FP16).
+        </p>
+      </div>
+      <div class="gpu-stack">
+        <div class="gpu-pill" id="gpuPill">
+          <span class="dot" id="gpuDot"></span>
+          <span id="gpuText">Checking device…</span>
         </div>
+        <div class="gpu-meta" id="gpuMeta"></div>
+        <div class="gpu-hint" id="gpuHint" style="display:none"></div>
+      </div>
+    </header>
 
-        <div class="grid">
-            <!-- Left Panel: Quantization Control -->
-            <div class="card">
-                <div class="card-header">
-                    <h2>🎛️ Quantization Control</h2>
-                    <p>Configure and run mixed-precision quantization</p>
-                </div>
-                <div class="card-body">
-                    <div class="form-group">
-                        <label>📦 Model Name</label>
-                        <input type="text" id="modelName" placeholder="e.g., gpt2, TinyLlama/TinyLlama-1.1B-Chat-v1.0" value="gpt2">
-                        
-                        <div class="preset-buttons">
-                            <button type="button" class="preset-btn" onclick="setModel('gpt2', 0.15)">📝 GPT-2 (0.23GB → 0.15GB)</button>
-                            <button type="button" class="preset-btn" onclick="setModel('facebook/opt-1.3b', 1.0)">⚡ OPT-1.3B (2.6GB → 1GB)</button>
-                            <button type="button" class="preset-btn" onclick="setModel('TinyLlama/TinyLlama-1.1B-Chat-v1.0', 1.0)">🦙 TinyLlama (2.2GB → 1GB)</button>
-                            <button type="button" class="preset-btn" onclick="setModel('microsoft/phi-2', 1.2)">🔬 Phi-2 (2.8GB → 1.2GB)</button>
-                        </div>
-                        <span class="help-text">💡 Use full Hugging Face model names</span>
-                    </div>
+    <div class="card">
+      <h2>Run</h2>
+      <label for="modelName">Hugging Face model id</label>
+      <input type="text" id="modelName" value="gpt2" autocomplete="off">
 
-                    <div class="form-group">
-                        <label>💾 Memory Budget</label>
-                        <div class="slider-container">
-                            <input type="range" id="budgetSlider" min="0.1" max="4.0" step="0.1" value="0.15">
-                            <div class="budget-value">
-                                <span id="budgetValue">0.15</span> GB
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="form-group">
-                        <label>📊 Model Info</label>
-                        <div id="modelInfo" class="model-info-box">
-                            Click "Check Model" to see details
-                        </div>
-                    </div>
-
-                    <div style="display: flex; gap: 12px; margin-top: 20px;">
-                        <button class="btn btn-secondary" id="checkModelBtn" style="width: auto; flex: 1;">🔍 Check Model</button>
-                        <button class="btn btn-primary" id="quantizeBtn" style="flex: 2;">🚀 Start Quantization</button>
-                    </div>
-
-                    <div id="progressPanel" style="display: none;">
-                        <div class="progress-container">
-                            <div class="progress-bar">
-                                <div class="progress-fill" id="progressFill"></div>
-                            </div>
-                            <div class="progress-text" id="progressMessage">Initializing...</div>
-                        </div>
-                        <div class="log-window" id="logWindow"></div>
-                    </div>
-
-                    <div id="statusMessage"></div>
-                </div>
-            </div>
-
-            <!-- Right Panel: Quantized Models -->
-            <div class="card">
-                <div class="card-header">
-                    <h2>📁 Quantized Models</h2>
-                    <p>Your saved quantized models</p>
-                </div>
-                <div class="card-body">
-                    <div id="modelsList" class="model-list">
-                        <div class="empty-state">
-                            <div class="spinner"></div>
-                            <p style="margin-top: 10px;">Loading models...</p>
-                        </div>
-                    </div>
-                    <button class="btn btn-secondary" id="refreshModelsBtn" style="margin-top: 16px;">🔄 Refresh</button>
-                </div>
-            </div>
+      <div class="row" style="margin-top:14px">
+        <div>
+          <label for="targetGb">Memory budget (max size after quant, GB)</label>
+          <input type="range" id="targetGb" min="0.08" max="2" step="0.02" value="0.18">
+          <div class="budget-readout" id="targetReadout">≤ 0.18 GB</div>
         </div>
+        <div>
+          <label for="numSamples">Calibration samples (higher = slower, smoother sensitivity)</label>
+          <input type="number" id="numSamples" min="8" max="200" value="48" step="4">
+        </div>
+      </div>
+
+      <button class="btn" id="runBtn" type="button">Start quantization</button>
+      <div class="progress-outer"><div class="progress-inner" id="progressBar"></div></div>
+      <p class="status-line" id="statusLine">Idle.</p>
+      <p class="status-line" id="detailLine" style="margin-top:4px"></p>
+      <div class="err-banner" id="errBanner" style="display:none"></div>
     </div>
 
-    <script>
-        let currentTaskId = null;
-        let statusInterval = null;
+    <div class="card">
+      <h2>Pipeline</h2>
+      <div class="steps" id="stepsRoot"></div>
+    </div>
 
-        // Budget slider
-        const slider = document.getElementById('budgetSlider');
-        const budgetValue = document.getElementById('budgetValue');
-        slider.oninput = () => {
-            budgetValue.textContent = parseFloat(slider.value).toFixed(1);
-        };
+    <div class="card">
+      <h2>Numbers</h2>
+      <div class="metrics">
+        <div class="metric">
+          <div class="k">Logical parameters</div>
+          <div class="v" id="mParams">—</div>
+        </div>
+        <div class="metric">
+          <div class="k">Quantizable weight params</div>
+          <div class="v" id="mQuantParams">—</div>
+        </div>
+        <div class="metric">
+          <div class="k">Weighted avg bits (weights)</div>
+          <div class="v" id="mAvgBits">— <small>after plan</small></div>
+        </div>
+      </div>
+      <div class="compare">
+        <h3>Model footprint (weights + buffers in RAM)</h3>
+        <div class="bar-row">
+          <span><span>Before (FP16 baseline)</span><span id="szBeforeLbl">—</span></span>
+          <div class="bar-bg"><div class="bar-fill fp16" id="barBefore" style="width:0%"></div></div>
+        </div>
+        <div class="bar-row">
+          <span><span>After quantization</span><span id="szAfterLbl">—</span></span>
+          <div class="bar-bg"><div class="bar-fill q" id="barAfter" style="width:0%"></div></div>
+        </div>
+      </div>
+      <div class="callout" id="distCallout" style="display:none"></div>
+    </div>
 
-        // Set model preset
-        function setModel(modelName, targetBudget) {
-            document.getElementById('modelName').value = modelName;
-            slider.value = targetBudget;
-            budgetValue.textContent = targetBudget.toFixed(1);
-            setTimeout(() => {
-                document.getElementById('checkModelBtn').click();
-            }, 100);
-        }
+    <div class="card">
+      <h2>Log</h2>
+      <div class="log" id="logBox"></div>
+    </div>
+  </div>
 
-        // Check model info
-        document.getElementById('checkModelBtn').onclick = async () => {
-            const modelName = document.getElementById('modelName').value;
-            const infoDiv = document.getElementById('modelInfo');
-            
-            if (!modelName) {
-                infoDiv.innerHTML = '<span style="color: var(--warning);">⚠️ Please enter a model name</span>';
-                return;
-            }
-            
-            infoDiv.innerHTML = '<div class="spinner"></div> Fetching model info...';
-            
-            try {
-                const response = await fetch(`/api/info/${encodeURIComponent(modelName)}`);
-                const data = await response.json();
-                
-                if (data.error) {
-                    infoDiv.innerHTML = `<span style="color: var(--error);">❌ ${data.error}</span>`;
-                } else {
-                    infoDiv.innerHTML = `
-                        <div><strong>✅ ${data.name}</strong></div>
-                        <div>📈 Parameters: ${data.parameters_m.toFixed(1)}M</div>
-                        <div>💾 FP16 Size: ${data.fp16_size_gb.toFixed(2)} GB</div>
-                        <div>🎯 Recommended Budget: ${data.recommended_budget_gb.toFixed(1)} GB</div>
-                        <div class="help-text" style="margin-top: 8px;">✓ Model found on Hugging Face</div>
-                    `;
-                    
-                    if (data.recommended_budget_gb && parseFloat(slider.value) > data.fp16_size_gb) {
-                        slider.value = data.recommended_budget_gb;
-                        budgetValue.textContent = data.recommended_budget_gb.toFixed(1);
-                    }
-                }
-            } catch (error) {
-                infoDiv.innerHTML = `<span style="color: var(--error);">❌ Network error: ${error.message}</span>`;
-            }
-        };
+  <script>
+    const STEP_DEFS = [
+      { id: "load", title: "Load model", detail: "Download (if needed) and load weights; use GPU when available." },
+      { id: "sensitivity", title: "Profile sensitivity", detail: "Calibration passes: gradient energy per weight layer." },
+      { id: "allocate", title: "Allocate bit widths", detail: "Greedy knapsack under your memory budget." },
+      { id: "quantize", title: "Quantize & save", detail: "Packed INT weights + scales; write checkpoint." },
+    ];
 
-        // Start quantization
-        document.getElementById('quantizeBtn').onclick = async () => {
-            const modelName = document.getElementById('modelName').value;
-            const targetSize = parseFloat(slider.value);
-            
-            if (!modelName) {
-                showStatus('Please enter a model name', 'error');
-                return;
-            }
-            
-            const btn = document.getElementById('quantizeBtn');
-            btn.disabled = true;
-            btn.textContent = '⏳ Starting...';
-            
-            document.getElementById('progressPanel').style.display = 'block';
-            document.getElementById('progressFill').style.width = '0%';
-            document.getElementById('progressMessage').textContent = 'Starting quantization...';
-            document.getElementById('logWindow').innerHTML = '';
-            
-            try {
-                const response = await fetch('/api/quantize', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        model_name: modelName,
-                        target_size_gb: targetSize
-                    })
-                });
-                
-                const data = await response.json();
-                currentTaskId = data.task_id;
-                
-                if (statusInterval) clearInterval(statusInterval);
-                statusInterval = setInterval(pollStatus, 1500);
-                
-            } catch (error) {
-                showStatus(`Error: ${error.message}`, 'error');
-                btn.disabled = false;
-                btn.textContent = '🚀 Start Quantization';
-                document.getElementById('progressPanel').style.display = 'none';
-            }
-        };
-        
-        async function pollStatus() {
-            if (!currentTaskId) return;
-            
-            try {
-                const response = await fetch(`/api/status/${currentTaskId}`);
-                const status = await response.json();
-                
-                const progressFill = document.getElementById('progressFill');
-                const progressMessage = document.getElementById('progressMessage');
-                
-                progressFill.style.width = `${status.progress}%`;
-                progressMessage.textContent = status.message;
-                
-                if (status.log) {
-                    const logWindow = document.getElementById('logWindow');
-                    logWindow.innerHTML = status.log;
-                    logWindow.scrollTop = logWindow.scrollHeight;
-                }
-                
-                if (status.status === 'complete') {
-                    clearInterval(statusInterval);
-                    currentTaskId = null;
-                    
-                    showStatus(`✅ Quantization complete! ${status.compression_ratio ? status.compression_ratio.toFixed(1) : '?'}x compression achieved.`, 'success');
-                    
-                    document.getElementById('quantizeBtn').disabled = false;
-                    document.getElementById('quantizeBtn').textContent = '🚀 Start Quantization';
-                    
-                    loadModels();
-                    
-                    setTimeout(() => {
-                        document.getElementById('progressPanel').style.display = 'none';
-                    }, 3000);
-                    
-                } else if (status.status === 'error') {
-                    clearInterval(statusInterval);
-                    currentTaskId = null;
-                    
-                    showStatus(`❌ Error: ${status.message}`, 'error');
-                    
-                    document.getElementById('quantizeBtn').disabled = false;
-                    document.getElementById('quantizeBtn').textContent = '🚀 Start Quantization';
-                }
-                
-            } catch (error) {
-                console.error('Polling error:', error);
-            }
+    const $ = (id) => document.getElementById(id);
+    const fmt = (n) => n == null || n === "" || Number.isNaN(n) ? "—" :
+      (n >= 1e9 ? (n / 1e9).toFixed(2) + "B" : n >= 1e6 ? (n / 1e6).toFixed(2) + "M" : n.toLocaleString());
+
+    function renderSteps(currentIndex, doneThrough) {
+      const root = $("stepsRoot");
+      root.innerHTML = STEP_DEFS.map((s, i) => {
+        let cls = "step";
+        if (i < doneThrough) cls += " done";
+        else if (i === currentIndex) cls += " active";
+        return `<div class="${cls}">
+          <div class="step-idx">${i + 1}</div>
+          <div>
+            <div class="step-title">${s.title}</div>
+            <div class="step-detail">${s.detail}</div>
+          </div>
+        </div>`;
+      }).join("");
+    }
+
+    async function refreshGpu() {
+      const hintEl = $("gpuHint");
+      const metaEl = $("gpuMeta");
+      try {
+        const r = await fetch("/api/system");
+        const g = await r.json();
+        const on = g.cuda_available;
+        $("gpuDot").classList.toggle("on", on);
+        const el = $("gpuText");
+        if (on) {
+          el.innerHTML = `<strong>GPU</strong> — ${g.device_name || "CUDA"}${g.total_vram_gb ? " · " + g.total_vram_gb + " GB VRAM" : ""}`;
+          hintEl.style.display = "none";
+          metaEl.textContent = g.pytorch_version ? "PyTorch " + g.pytorch_version + (g.pytorch_cuda_version ? " · CUDA " + g.pytorch_cuda_version : "") : "";
+        } else {
+          el.innerHTML = "<strong>CPU only</strong> — PyTorch is not using CUDA";
+          const built = g.pytorch_built_with_cuda;
+          metaEl.textContent = (g.pytorch_version ? "PyTorch " + g.pytorch_version : "") +
+            (built === false ? " · CPU-only build (no CUDA in this wheel)" : built ? " · CUDA-enabled build, but GPU not visible" : "");
+          if (g.cuda_hint) {
+            hintEl.style.display = "block";
+            hintEl.textContent = g.cuda_hint;
+          } else {
+            hintEl.style.display = "none";
+          }
         }
-        
-        function showStatus(message, type) {
-            const statusDiv = document.getElementById('statusMessage');
-            statusDiv.innerHTML = `<div class="status status-${type}">${message}</div>`;
-            setTimeout(() => {
-                if (statusDiv.innerHTML.includes(message)) {
-                    statusDiv.innerHTML = '';
-                }
-            }, 5000);
-        }
-        
-        // Load quantized models
-        async function loadModels() {
-            try {
-                const response = await fetch('/api/models');
-                const models = await response.json();
-                
-                const container = document.getElementById('modelsList');
-                
-                if (!models || models.length === 0) {
-                    container.innerHTML = `
-                        <div class="empty-state">
-                            <p>📭 No quantized models yet</p>
-                            <p class="help-text">Run quantization above to create your first model</p>
-                        </div>
-                    `;
-                    return;
-                }
-                
-                container.innerHTML = models.map(model => `
-                    <div class="model-item">
-                        <div class="model-info">
-                            <h4>${escapeHtml(model.name)}</h4>
-                            <div class="model-stats">
-                                <span>📦 ${model.size_gb?.toFixed(2) || '?'} GB</span>
-                                <span>⚡ ${model.compression_ratio?.toFixed(1) || '?'}x</span>
-                                <span>📅 ${model.date ? new Date(model.date).toLocaleDateString() : 'Unknown'}</span>
-                            </div>
-                            <p class="help-text">ID: ${escapeHtml(model.id)}</p>
-                        </div>
-                        <div class="model-actions">
-                            <button class="icon-btn" onclick="downloadModel('${escapeHtml(model.id)}')" title="Download">📥</button>
-                            <button class="icon-btn" onclick="deleteModel('${escapeHtml(model.id)}')" title="Delete">🗑️</button>
-                        </div>
-                    </div>
-                `).join('');
-                
-            } catch (error) {
-                console.error('Error loading models:', error);
-                document.getElementById('modelsList').innerHTML = `
-                    <div class="empty-state">
-                        <p>❌ Error loading models</p>
-                        <p class="help-text">${error.message}</p>
-                    </div>
-                `;
-            }
-        }
-        
-        function escapeHtml(str) {
-            if (!str) return '';
-            return str.replace(/[&<>]/g, function(m) {
-                if (m === '&') return '&amp;';
-                if (m === '<') return '&lt;';
-                if (m === '>') return '&gt;';
-                return m;
-            });
-        }
-        
-        async function downloadModel(modelId) {
-            window.open(`/api/download/${modelId}`, '_blank');
-        }
-        
-        async function deleteModel(modelId) {
-            if (!confirm('Are you sure you want to delete this model?')) return;
-            
-            try {
-                const response = await fetch(`/api/delete/${modelId}`, { method: 'DELETE' });
-                if (response.ok) {
-                    loadModels();
-                    showStatus('Model deleted successfully', 'success');
-                } else {
-                    showStatus('Failed to delete model', 'error');
-                }
-            } catch (error) {
-                showStatus(`Error: ${error.message}`, 'error');
-            }
-        }
-        
-        // Initial load
-        loadModels();
-        
-        // Refresh button
-        document.getElementById('refreshModelsBtn').onclick = loadModels;
-        
-        // Auto-check model when name changes (debounced)
-        let debounceTimer;
-        document.getElementById('modelName').oninput = () => {
-            clearTimeout(debounceTimer);
-            debounceTimer = setTimeout(() => {
-                document.getElementById('checkModelBtn').click();
-            }, 500);
-        };
-        
-        // Initial check
-        setTimeout(() => {
-            document.getElementById('checkModelBtn').click();
-        }, 500);
-    </script>
+      } catch (e) {
+        $("gpuText").textContent = "Could not read device info";
+        metaEl.textContent = "";
+        hintEl.style.display = "none";
+      }
+    }
+
+    function setProgress(pct) {
+      $("progressBar").style.width = Math.min(100, Math.max(0, pct)) + "%";
+    }
+
+    function updateMetrics(st) {
+      if (!st || !Object.keys(st).length) return;
+      if (st.total_parameters != null) $("mParams").textContent = fmt(st.total_parameters);
+      if (st.quantizable_parameter_count != null) $("mQuantParams").textContent = fmt(st.quantizable_parameter_count);
+      if (st.weighted_avg_bits != null) $("mAvgBits").innerHTML = st.weighted_avg_bits + ' <small>after plan</small>';
+
+      const o = st.original_size_gb;
+      const q = st.quantized_size_gb;
+      if (o != null) {
+        $("szBeforeLbl").textContent = o.toFixed(3) + " GB";
+        $("barBefore").style.width = "100%";
+      }
+      if (q != null && o != null) {
+        $("szAfterLbl").textContent = q.toFixed(3) + " GB";
+        const ratio = o > 0 ? Math.min(100, (q / o) * 100) : 0;
+        $("barAfter").style.width = ratio + "%";
+      } else if (o != null && st.expected_size_gb != null) {
+        $("szAfterLbl").textContent = "~" + st.expected_size_gb.toFixed(3) + " GB (expected)";
+        const ratio = o > 0 ? Math.min(100, (st.expected_size_gb / o) * 100) : 0;
+        $("barAfter").style.width = ratio + "%";
+      }
+
+      if (st.bit_distribution && Object.keys(st.bit_distribution).length) {
+        const parts = Object.entries(st.bit_distribution)
+          .sort((a, b) => Number(a[0]) - Number(b[0]))
+          .map(([bits, count]) => {
+            const label = Number(bits) >= 16 ? "FP16" : ("INT" + bits);
+            return label + ": " + count + " modules";
+          });
+        $("distCallout").style.display = "block";
+        $("distCallout").textContent = "Bit mix — " + parts.join(" · ");
+      }
+    }
+
+    function renderLog(lines) {
+      $("logBox").textContent = (lines || []).join("\n");
+    }
+
+    let pollTimer = null;
+
+    async function pollTask(taskId) {
+      const r = await fetch("/api/status/" + taskId);
+      if (!r.ok) return;
+      const t = await r.json();
+      const idx = t.current_step_index ?? 0;
+      const st = t.status;
+      let doneThrough = 0;
+      if (st === "done") doneThrough = STEP_DEFS.length;
+      else if (st === "running" || st === "error") doneThrough = idx;
+
+      renderSteps(idx, doneThrough);
+      setProgress(t.progress_percent ?? 0);
+      $("statusLine").innerHTML = "<strong>" + (t.message || "") + "</strong>";
+      $("detailLine").textContent = t.detail_line || "";
+      updateMetrics(t.stats || {});
+      renderLog(t.log_lines || []);
+
+      if (t.status === "error") {
+        $("errBanner").style.display = "block";
+        $("errBanner").textContent = t.error || "Unknown error";
+        $("runBtn").disabled = false;
+        clearInterval(pollTimer);
+        pollTimer = null;
+        return;
+      }
+      if (t.status === "done") {
+        $("runBtn").disabled = false;
+        clearInterval(pollTimer);
+        pollTimer = null;
+        return;
+      }
+    }
+
+    $("targetGb").addEventListener("input", () => {
+      const v = parseFloat($("targetGb").value);
+      $("targetReadout").textContent = "≤ " + v.toFixed(2) + " GB";
+    });
+
+    $("runBtn").addEventListener("click", async () => {
+      $("runBtn").disabled = true;
+      $("errBanner").style.display = "none";
+      setProgress(0);
+      renderSteps(0, 0);
+      renderLog([]);
+      $("mParams").textContent = "—";
+      $("mQuantParams").textContent = "—";
+      $("mAvgBits").innerHTML = "— <small>after plan</small>";
+      $("szBeforeLbl").textContent = "—";
+      $("szAfterLbl").textContent = "—";
+      $("barBefore").style.width = "0%";
+      $("barAfter").style.width = "0%";
+      $("distCallout").style.display = "none";
+
+      const body = {
+        model_name: $("modelName").value.trim(),
+        target_size_gb: parseFloat($("targetGb").value),
+        num_samples: parseInt($("numSamples").value, 10),
+      };
+      const res = await fetch("/api/quantize", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        $("errBanner").style.display = "block";
+        $("errBanner").textContent = data.error || "Request failed";
+        $("runBtn").disabled = false;
+        return;
+      }
+      const taskId = data.task_id;
+      pollTimer = setInterval(() => pollTask(taskId), 450);
+      pollTask(taskId);
+    });
+
+    renderSteps(0, 0);
+    refreshGpu();
+  </script>
 </body>
 </html>

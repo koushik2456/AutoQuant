@@ -2,27 +2,28 @@
 Direct test - bypasses web UI
 """
 
+import json
+
 from autoquant import AutoQuantizer
 
-print("="*60)
+print("=" * 60)
 print("Direct Quantization Test")
-print("="*60)
+print("=" * 60)
 
-# Initialize
 quantizer = AutoQuantizer("gpt2")
 
-# Analyze
 print("\n1. Analyzing sensitivity...")
 sensitivity = quantizer.analyze_sensitivity(num_samples=100)
 print(f"   Found {len(sensitivity)} layers")
 
-# Create config
 print("\n2. Creating config for 1GB target...")
-config = quantizer.create_config(1.0)
-print(f"   Expected size: {config['expected_size_gb']:.2f} GB")
-print(f"   Compression: {config['compression_ratio']:.1f}x")
+config_result = quantizer.create_config(1.0)
+print(f"   Expected size: {config_result['expected_size_gb']:.2f} GB")
+print(f"   Compression: {config_result['compression_ratio']:.1f}x")
 
-# Quantize
+with open("config.json", "w", encoding="utf-8") as f:
+    json.dump(config_result["config"], f, indent=2)
+
 print("\n3. Applying quantization...")
 quantizer.quantize("config.json", "quantized_test")
 

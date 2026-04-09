@@ -1,0 +1,290 @@
+================================================================================
+  TEAM REVIEW PLAN (4 MEMBERS) — AUTOQUANT (SE-IN-AI)
+  Order by depth/difficulty requested:
+  1) Vinay Koushik (hardest + most topics)
+  2) Yashaswini
+  3) Mohana Priya
+  4) Gowtham
+================================================================================
+
+GOAL OF THIS DOCUMENT
+--------------------------------------------------------------------------------
+This file is your exact stage script:
+  - Who speaks what
+  - Which file to open while speaking
+  - What to type/run in browser and terminal
+  - Expected questions and answers per person
+
+Total suggested duration: 20–25 minutes + Q&A.
+
+
+SECTION 1 — TIMELINE / FLOW (WHO SPEAKS WHEN)
+--------------------------------------------------------------------------------
+0:00–0:30   Vinay        Opening + problem statement
+0:30–4:00   Vinay        Architecture + math intuition + system design
+4:00–7:00   Yashaswini   Sensitivity profiling details (Fisher proxy)
+7:00–10:00  Mohana Priya Bit allocation (knapsack-style budget logic)
+10:00–13:00 Gowtham      UI demo + running pipeline + outputs
+13:00–16:00 Vinay        Quantization internals + evaluation + limitations
+16:00–25:00 All          Viva Q&A (distribution provided below)
+
+
+SECTION 2 — WHAT EACH PERSON MUST SAY (SCRIPT + FILES TO SHOW)
+--------------------------------------------------------------------------------
+
+===============================================================================
+PERSON 1 — VINAY KOUSHIK (HARDEST; LEAD)
+===============================================================================
+TOPICS (highest depth):
+  A) Problem + motivation
+  B) End-to-end architecture
+  C) Quantization internals (DynamicQuantizedLinear)
+  D) GPU compatibility story and reliability
+  E) Final wrap-up + future improvements
+
+FILES TO OPEN WHILE SPEAKING:
+  1) autoquant/quantizer.py
+  2) autoquant/utils.py
+  3) app.py
+  4) evaluate.py
+
+SPEAKING SCRIPT (you can read this almost verbatim):
+  "Our project is AutoQuant, an automated mixed-precision quantization pipeline
+   for LLMs. Instead of forcing all layers to one precision, we profile layer
+   sensitivity, then allocate bit-widths under a memory budget. This preserves
+   quality for critical layers while compressing less critical ones.
+   In code, AutoQuantizer in quantizer.py orchestrates:
+   (1) load model, (2) analyze sensitivity, (3) create bit config,
+   (4) apply quantized structural replacement, (5) save and evaluate.
+   Our UI in app.py exposes each stage with progress and logs, and we confirmed
+   GPU execution using PyTorch CUDA 12.8 for RTX 50-series compatibility."
+
+WHAT TO POINT IN CODE:
+  - quantizer.py:
+      * class DynamicQuantizedLinear: buffers weight_q, scale, bias
+      * analyze_sensitivity(), create_config(), quantize(), get_report()
+  - utils.py:
+      * gpu_info_dict() (CUDA checks + hint)
+      * compute_model_size_gb() (parameters + buffers)
+  - app.py:
+      * /api/quantize background job + per-step task updates
+  - evaluate.py:
+      * reconstruct quantized structure and generate text
+
+KEY LINES TO EXPLAIN CONCEPTUALLY:
+  - "Quantization does not reduce number of parameters; it reduces storage bits."
+  - "Buffers store non-trainable quantized tensors and are saved in state_dict."
+  - "Per-channel scale improves representation for outlier-heavy transformer rows."
+
+VINAY'S VIVA QUESTIONS (hard):
+  Q1: Why use per-channel scaling, not single global scaling?
+  A1: Different output channels have different magnitudes. Per-channel scaling
+      reduces quantization error, especially with outlier channels.
+
+  Q2: Why register_buffer instead of Parameter for weight_q/scale?
+  A2: Quantized tensors are fixed after quantization; they should move with device
+      and save/load via state_dict, but not be optimized during training.
+
+  Q3: Why can cuda.is_available() be true yet kernels fail?
+  A3: Build mismatch. Example: Blackwell sm_120 with cu124 wheel lacking matching
+      kernels. We solved by using torch+cu128.
+
+  Q4: What are major project limitations?
+  A4: No activation quantization, no perplexity benchmark integrated in UI,
+      and no TensorRT/llama.cpp export pipeline yet.
+
+
+===============================================================================
+PERSON 2 — YASHASWINI (NEXT HARDEST)
+===============================================================================
+TOPICS:
+  A) Sensitivity profiling method
+  B) Calibration data, gradient logic, normalization
+  C) Runtime/performance trade-offs
+
+FILES TO OPEN:
+  1) autoquant/sensitivity.py
+  2) app.py (progress callback usage in sensitivity stage)
+
+SPEAKING SCRIPT:
+  "My module computes layer sensitivity. In sensitivity.py, we run multiple
+   calibration samples and calculate loss gradients. For each quantizable layer,
+   we accumulate mean(grad^2) as a Fisher-style importance proxy.
+   After collecting all values, we normalize to [0,1]. High score means layer is
+   more sensitive to quantization noise and should retain higher precision.
+   In app.py, this runs with progress callbacks so the dashboard shows current
+   sample count in real time."
+
+WHAT TO POINT IN CODE:
+  - compute_sensitivity():
+      * model.eval(), model.zero_grad()
+      * outputs = model(..., labels=input_ids)
+      * loss.backward()
+      * grad_sq accumulation by layer
+      * normalization to [0,1]
+  - callback line: progress_callback(i+1, total, "sensitivity")
+
+YASHASWINI'S VIVA QUESTIONS:
+  Q1: Why use gradient squared as sensitivity?
+  A1: It approximates Fisher information and indicates how much loss changes
+      with weight perturbation.
+
+  Q2: Why normalize scores?
+  A2: Raw values vary by layer scale/model architecture; normalization gives
+      consistent ranking for allocator logic.
+
+  Q3: Why can calibration samples be reduced in demo?
+  A3: Fewer samples make runs faster; quality of sensitivity estimate improves
+      with more samples but has diminishing returns.
+
+
+===============================================================================
+PERSON 3 — MOHANA PRIYA
+===============================================================================
+TOPICS:
+  A) Bit allocation under memory budget
+  B) Knapsack-style greedy strategy
+  C) Non-linear layer handling (Embedding/LayerNorm at FP16)
+
+FILES TO OPEN:
+  1) autoquant/allocator.py
+  2) quantized_model_0/_run_config.json (example output config)
+
+SPEAKING SCRIPT:
+  "Allocator converts sensitivity into an executable bit plan.
+   In allocator.py, we estimate per-layer size at 4, 8, and 16 bits.
+   We start quantizable layers at minimum bits, sort by sensitivity descending,
+   then greedily upgrade layers to 8 and then 16 while staying inside target
+   budget. Embeddings and LayerNorm are retained at FP16 for stability.
+   Finally, we produce bit_assignments and expected_size_gb."
+
+WHAT TO POINT IN CODE:
+  - BIT_WIDTH_OPTIONS and BYTES_PER_BIT
+  - sorted_layers by sensitivity descending
+  - upgrade loop bits_target in [8,16]
+  - final_assignments merges non-linear FP16 layers
+  - summarize_assignments output distribution
+
+MOHANA PRIYA'S VIVA QUESTIONS:
+  Q1: Why greedy, not exact knapsack DP?
+  A1: Greedy is fast and practical for many layers; exact DP is costly and often
+      unnecessary for this level of approximation.
+
+  Q2: Why keep embedding/layernorm FP16?
+  A2: They are often sensitive and less impactful for total size reduction than
+      linear weights; keeping FP16 avoids instability.
+
+  Q3: What happens if target budget is very loose?
+  A3: Most layers stay FP16, so compression is small; lowering budget increases
+      quantized layers.
+
+
+===============================================================================
+PERSON 4 — GOWTHAM
+===============================================================================
+TOPICS:
+  A) Demo operation in browser
+  B) What each input field means
+  C) Output artifacts and how to verify
+
+FILES TO OPEN:
+  1) app.py (routes: /, /api/quantize, /api/status)
+  2) templates/index.html
+  3) evaluate.py (verification run)
+
+SPEAKING SCRIPT:
+  "I will show how users run the system. We open the dashboard and fill:
+   model id, target memory budget, and calibration samples.
+   On clicking Start, the backend launches a background task and updates progress
+   for load, sensitivity, allocation, and quantize stages.
+   After completion, output folder includes pytorch_model.bin,
+   quantization_config.json, tokenizer files, and _run_config.json.
+   We validate by running evaluate.py on that folder and generating sample text."
+
+LIVE DEMO STEPS (exact):
+  1) Terminal: python app.py
+  2) Browser: http://127.0.0.1:5000
+  3) Fill:
+       model = gpt2
+       budget = 0.18 (or 0.15–0.22)
+       samples = 48
+  4) Click Start quantization
+  5) Show progress + numbers + log
+  6) Terminal (after done):
+       python evaluate.py quantized_model_0
+
+GOWTHAM'S VIVA QUESTIONS:
+  Q1: Why does UI say parameter count unchanged?
+  A1: Quantization changes bit storage, not model topology or parameter count.
+
+  Q2: What files prove quantization happened?
+  A2: quantization_config.json contains bit assignments, and saved weights include
+      quantized buffers for replaced layers.
+
+  Q3: What if browser doesn't update?
+  A3: Check app process alive, correct port, and /api/status polling responses.
+
+
+SECTION 3 — TOPIC DISTRIBUTION SUMMARY TABLE
+--------------------------------------------------------------------------------
+Vinay Koushik  : Problem framing, architecture, quantizer internals, GPU issues,
+                 evaluation, limitations, final Q&A anchor.
+Yashaswini     : Sensitivity analysis theory + implementation.
+Mohana Priya   : Allocation optimization + budget math + bit distribution.
+Gowtham        : UI operation, runbook, output artifacts, demo flow.
+
+Difficulty order respected:
+  Vinay > Yashaswini > Mohana Priya > Gowtham
+More topics intentionally assigned to Vinay as requested.
+
+
+SECTION 4 — TEAM DEMO CHECKLIST (RUN BEFORE REVIEW)
+--------------------------------------------------------------------------------
+[ ] python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
+[ ] python app.py starts successfully
+[ ] Dashboard shows green GPU pill and GPU name
+[ ] One full run finishes (gpt2, 0.18 GB, 48 samples)
+[ ] quantized_model_0 folder exists
+[ ] python evaluate.py quantized_model_0 works
+[ ] Every member has their file tab open in IDE before presentation
+
+
+SECTION 5 — RAPID HANDOFF LINES (smooth transitions)
+--------------------------------------------------------------------------------
+Vinay -> Yashaswini:
+  "Now that architecture is clear, Yashaswini will explain how we compute
+   sensitivity scores from calibration gradients."
+
+Yashaswini -> Mohana Priya:
+  "With normalized sensitivity ready, Mohana Priya will show how we convert it
+   into budget-constrained bit assignments."
+
+Mohana Priya -> Gowtham:
+  "After allocation, Gowtham will show how the full pipeline runs in UI and
+   what exact files are generated."
+
+Gowtham -> Vinay:
+  "Vinay will close with internals, evaluation interpretation, and future work."
+
+
+SECTION 6 — IF FACULTY ASKS \"WHO DID WHAT IMPLEMENTATION-WISE?\"
+--------------------------------------------------------------------------------
+Use this answer:
+  - Vinay: core orchestration, GPU compatibility/debugging, quantization internals.
+  - Yashaswini: sensitivity logic and explanation of Fisher proxy workflow.
+  - Mohana Priya: allocator logic and memory-budget framing.
+  - Gowtham: dashboard flow, API-level demo, and evaluation walkthrough.
+  - Team: integration testing, demo readiness, and viva preparation.
+
+
+SECTION 7 — FINAL 30-SECOND CLOSING (VINAY)
+--------------------------------------------------------------------------------
+"AutoQuant shows that quantization can be made automatic, explainable, and
+interactive. We profile importance, allocate precision by budget, and present
+the entire pipeline transparently in a live dashboard with GPU execution.
+The system is modular, so we can extend it to stronger quantization methods and
+larger model backends in the next phase."
+
+================================================================================
+End of TEAM_REVIEW_PLAN.txt
+================================================================================

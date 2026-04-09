@@ -1,3 +1,7 @@
+# PyTorch: the default PyPI "torch" wheel is CPU-only (+cpu).
+# Install a CUDA build from pytorch.org, e.g.:
+#   RTX 50 / Blackwell (sm_120): pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+#   Older NVIDIA GPUs:            pip install torch --index-url https://download.pytorch.org/whl/cu124
 torch>=2.0.0
 transformers>=4.35.0
 accelerate>=0.24.0
@@ -8,4 +12,6 @@ tqdm>=4.65.0
 numpy>=1.24.0
 flask>=2.3.0
 flask-cors>=4.0.0
+waitress>=3.0.0
 psutil>=5.9.0
+pandas>=2.0.0

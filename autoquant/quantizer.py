@@ -1,152 +1,284 @@
+"""
+AutoQuantizer — Main orchestration class.
+
+Usage:
+    quantizer = AutoQuantizer("gpt2")
+    sensitivity = quantizer.analyze_sensitivity(num_samples=100)
+    config = quantizer.create_config(target_size_gb=0.5)
+    quantizer.quantize("config.json", "output_dir/")
+    report = quantizer.get_report()
+"""
+
+from __future__ import annotations
+
+import json
+import os
+from typing import Callable, Dict, Optional
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import numpy as np
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from datasets import load_dataset
-from .sensitivity import MultiMetricSensitivityAnalyzer
+
+from .allocator import allocate_bits, summarize_assignments
+from .sensitivity import compute_sensitivity
+from .utils import (
+    as_linear_for_quantize,
+    compute_model_size_gb,
+    get_device,
+    is_quantizable_weight_module,
+)
 
 
-# =========================
-# INT4 BIT PACKING
-# =========================
+class DynamicQuantizedLinear(nn.Module):
+    """
+    INT-backed linear layer that stores weights as quantized integers with
+    a per-output-channel scale factor. During forward pass, weights are
+    dequantized on the fly: weight_fp = weight_int * scale.
+    """
 
-def pack_int4(x):
-    x = x.clamp(-8, 7).to(torch.int8)
-    x = x + 8
-
-    high = x[:, ::2]
-    low = x[:, 1::2]
-
-    return (high << 4) | low
-
-
-def unpack_int4(packed, shape):
-    high = (packed >> 4) & 0xF
-    low = packed & 0xF
-
-    x = torch.stack([high, low], dim=-1).view(packed.size(0), -1)
-    x = x[:, :shape[1]]
-
-    return x.float() - 8
-
-
-# =========================
-# QUANT LINEAR
-# =========================
-
-class QuantLinear(nn.Module):
-    def __init__(self, weight, bits=4, group_size=128):
+    def __init__(self, original_linear: nn.Linear, bits: int):
         super().__init__()
-
+        self.in_features = original_linear.in_features
+        self.out_features = original_linear.out_features
         self.bits = bits
-        self.group_size = group_size
-        self.original_shape = weight.shape
 
-        out_features, in_features = weight.shape
+        weight_fp = original_linear.weight.data.float()
 
-        num_groups = (in_features + group_size - 1) // group_size
-        pad = num_groups * group_size - in_features
+        max_val = weight_fp.abs().max(dim=1, keepdim=True).values.clamp(min=1e-8)
+        num_levels = 2 ** (bits - 1) - 1
+        scale = max_val / num_levels
 
-        if pad > 0:
-            weight = F.pad(weight, (0, pad))
+        weight_q = (weight_fp / scale).round().clamp(-num_levels, num_levels).to(
+            torch.int8
+        )
 
-        weight = weight.view(out_features, num_groups, group_size)
+        self.register_buffer("weight_q", weight_q)
+        self.register_buffer("scale", scale.to(torch.float16))
 
-        qmax = 2**(bits-1)-1
-        max_val = weight.abs().amax(dim=2, keepdim=True)
-        scale = max_val / (qmax + 1e-8)
-
-        q = torch.round(weight / scale)
-        q = torch.clamp(q, -qmax, qmax).to(torch.int8)
-
-        if bits == 4:
-            q = q.view(out_features, -1)
-            q = pack_int4(q)
-
-        self.register_buffer("qweight", q)
-        self.register_buffer("scale", scale)
-        self.num_groups = num_groups
-
-    def forward(self, x):
-        B = x.shape[0]
-
-        if x.shape[-1] < self.num_groups * self.group_size:
-            pad = self.num_groups * self.group_size - x.shape[-1]
-            x = F.pad(x, (0, pad))
-
-        x = x.view(B, self.num_groups, self.group_size)
-
-        if self.bits == 4:
-            q = unpack_int4(self.qweight, self.original_shape)
-            q = q.view(self.original_shape[0], self.num_groups, self.group_size)
+        if original_linear.bias is not None:
+            self.register_buffer("bias", original_linear.bias.data.to(torch.float16))
         else:
-            q = self.qweight.float()
+            self.register_parameter("bias", None)
 
-        w = q * self.scale
-        return torch.einsum("bgs,ogs->bo", x, w)
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        weight_deq = self.weight_q.to(self.scale.dtype) * self.scale
+        return F.linear(x, weight_deq, self.bias)
+
+    def extra_repr(self) -> str:
+        return f"in={self.in_features}, out={self.out_features}, bits={self.bits}"
 
 
-# =========================
-# AUTOQUANTIZER
-# =========================
+def _replace_layer(model: nn.Module, layer_name: str, new_module: nn.Module) -> None:
+    """Navigate the module tree by dotted name and replace the target."""
+    parts = layer_name.split(".")
+    parent = model
+    for part in parts[:-1]:
+        parent = getattr(parent, part)
+    setattr(parent, parts[-1], new_module)
+
 
 class AutoQuantizer:
-    def __init__(self, model_name, device="cuda"):
-        self.device = device if torch.cuda.is_available() else "cpu"
+    """
+    High-level interface for AutoQuant mixed-precision quantization.
+
+    Lifecycle:
+        1. __init__ — load model + tokenizer
+        2. analyze_sensitivity — compute per-layer Fisher scores
+        3. create_config — solve bit allocation under budget
+        4. quantize — apply quantization and save
+        5. get_report — return compression statistics
+    """
+
+    def __init__(self, model_name: str):
+        self.model_name = model_name
+        self.device = get_device()
+
+        print(f"📥 Loading model: {model_name}")
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        if self.tokenizer.pad_token is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
 
         self.model = AutoModelForCausalLM.from_pretrained(
             model_name,
             torch_dtype=torch.float16,
-            low_cpu_mem_usage=True
-        ).to(self.device)
+            low_cpu_mem_usage=True,
+        )
+        self.model.to(self.device)
 
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        self.original_size = compute_model_size_gb(self.model)
+        print(f"   Original size: {self.original_size:.3f} GB")
 
-    def get_calibration_data(self, n=100):
-        ds = load_dataset("wikitext", "wikitext-2-raw-v1", split="train")
-        return [t for t in ds["text"] if len(t) > 20][:n]
+        self.sensitivity_scores: Optional[Dict[str, float]] = None
+        self.bit_assignments: Optional[Dict[str, int]] = None
+        self.quantized_size: Optional[float] = None
+        self.output_dir: Optional[str] = None
 
-    def analyze(self):
-        texts = self.get_calibration_data()
-        analyzer = MultiMetricSensitivityAnalyzer(self.model, self.device)
-        return analyzer.analyze(texts, self.tokenizer)
+    def analyze_sensitivity(
+        self,
+        num_samples: int = 100,
+        progress_callback: Optional[Callable[[int, int, str], None]] = None,
+    ) -> Dict[str, float]:
+        """
+        Compute Fisher Information sensitivity scores for all linear layers.
 
-    def assign_bits(self, scores):
-        config = {}
-        for k, v in scores.items():
-            if v > 0.7:
-                config[k] = 8
-            elif v > 0.4:
-                config[k] = 4
-            else:
-                config[k] = 2
-        return config
+        ``progress_callback(current, total, label)`` is invoked after each
+        calibration sample when provided (``label`` is ``"sensitivity"``).
+        """
+        print(f"🔬 Analyzing sensitivity ({num_samples} samples)...")
 
-    def quantize(self, config):
-        for name, module in list(self.model.named_modules()):
-            if isinstance(module, nn.Linear) and name in config:
-                bits = config[name]
-                qlayer = QuantLinear(module.weight.data, bits)
+        def _cb(cur: int, tot: int, _phase: str) -> None:
+            if progress_callback is not None:
+                progress_callback(cur, tot, "sensitivity")
 
-                parent = self._get_parent(name)
-                setattr(parent, name.split('.')[-1], qlayer)
+        self.sensitivity_scores = compute_sensitivity(
+            self.model,
+            self.tokenizer,
+            num_samples,
+            device=self.device,
+            progress_callback=_cb if progress_callback is not None else None,
+        )
+        print(f"   Scored {len(self.sensitivity_scores)} layers")
+        return self.sensitivity_scores
 
-    def _get_parent(self, name):
-        obj = self.model
-        for p in name.split('.')[:-1]:
-            obj = getattr(obj, p)
-        return obj
+    def create_config(self, target_size_gb: float) -> dict:
+        """
+        Solve the bit-allocation optimization problem.
+        """
+        if self.sensitivity_scores is None:
+            raise RuntimeError("Call analyze_sensitivity() first")
 
-    def run(self):
-        print("🔬 Sensitivity...")
-        scores = self.analyze()
+        print(f"🎯 Allocating bits for {target_size_gb:.2f} GB target...")
 
-        print("⚙️ Bit allocation...")
-        config = self.assign_bits(scores)
+        self.bit_assignments, expected_size = allocate_bits(
+            self.model, self.sensitivity_scores, target_size_gb
+        )
 
-        print("🔧 Quantizing...")
-        self.quantize(config)
+        compression_ratio = (
+            self.original_size / expected_size if expected_size > 0 else 1.0
+        )
 
-        print("✅ Done")
-        return self.model
+        config = {
+            "model_name": self.model_name,
+            "target_size_gb": target_size_gb,
+            "original_size_gb": self.original_size,
+            "expected_size_gb": expected_size,
+            "compression_ratio": compression_ratio,
+            "sensitivity_scores": self.sensitivity_scores,
+            "bit_assignments": self.bit_assignments,
+            "bit_distribution": summarize_assignments(self.bit_assignments),
+        }
+
+        dist = config["bit_distribution"]
+        print(
+            f"   Expected size: {expected_size:.3f} GB ({compression_ratio:.2f}x compression)"
+        )
+        print(f"   Bit distribution: {dist}")
+
+        return {
+            "config": config,
+            "expected_size_gb": expected_size,
+            "compression_ratio": compression_ratio,
+        }
+
+    def quantize(
+        self,
+        config_path: str,
+        output_dir: str,
+        progress_callback: Optional[Callable[[int, int, str], None]] = None,
+    ) -> None:
+        """
+        Apply mixed-precision quantization and save to disk.
+
+        ``progress_callback(current, total, layer_name)`` fires after each
+        layer replaced (``total`` is the number of layers below 16-bit).
+        """
+        with open(config_path, "r", encoding="utf-8") as f:
+            config = json.load(f)
+
+        assignments_raw = config["bit_assignments"]
+        assignments = {k: int(v) for k, v in assignments_raw.items()}
+
+        os.makedirs(output_dir, exist_ok=True)
+
+        n_quant = sum(1 for b in assignments.values() if b < 16)
+        print(f"⚙️  Applying quantization to {n_quant} layers...")
+
+        replaced = 0
+        for name, bits in assignments.items():
+            if bits >= 16:
+                continue
+            for module_name, module in list(self.model.named_modules()):
+                if module_name == name and is_quantizable_weight_module(module):
+                    lin = as_linear_for_quantize(module)
+                    new_layer = DynamicQuantizedLinear(lin, bits)
+                    _replace_layer(self.model, module_name, new_layer)
+                    replaced += 1
+                    if progress_callback is not None and n_quant > 0:
+                        progress_callback(replaced, n_quant, name)
+                    break
+
+        print(f"   Replaced {replaced} layers with INT-backed quantized layers")
+
+        weights_path = os.path.join(output_dir, "pytorch_model.bin")
+        print(f"💾 Saving weights to {weights_path}...")
+        torch.save(self.model.state_dict(), weights_path)
+
+        self.tokenizer.save_pretrained(output_dir)
+
+        quant_config = {
+            "model_name": self.model_name,
+            "bit_assignments": assignments,
+            "bit_distribution": config.get("bit_distribution", {}),
+            "original_size_gb": config.get("original_size_gb", self.original_size),
+        }
+        qpath = os.path.join(output_dir, "quantization_config.json")
+        with open(qpath, "w", encoding="utf-8") as f:
+            json.dump(quant_config, f, indent=2)
+
+        self.quantized_size = compute_model_size_gb(self.model)
+        self.output_dir = output_dir
+        print(
+            f"✅ Quantized model saved to '{output_dir}' ({self.quantized_size:.3f} GB)"
+        )
+
+    def get_report(self) -> dict:
+        """Return a summary dict of quantization results."""
+        if self.quantized_size is None:
+            raise RuntimeError("Call quantize() first")
+
+        compression = (
+            self.original_size / self.quantized_size
+            if self.quantized_size > 0
+            else 1.0
+        )
+        space_saved = (1 - self.quantized_size / self.original_size) * 100
+
+        return {
+            "model_name": self.model_name,
+            "original_size_gb": self.original_size,
+            "quantized_size_gb": self.quantized_size,
+            "compression_ratio": compression,
+            "space_saved_percent": space_saved,
+            "bit_distribution": summarize_assignments(self.bit_assignments or {}),
+            "output_dir": self.output_dir,
+        }
+
+    def run(
+        self,
+        target_size_gb: float = 0.5,
+        output_dir: str = "quantized_model",
+        config_path: Optional[str] = None,
+    ) -> dict:
+        """
+        End-to-end pipeline: sensitivity → config → quantize → report.
+
+        Writes config JSON to ``config_path`` (default: ``config.json`` in cwd).
+        """
+        cfg_out = config_path or "config.json"
+        self.analyze_sensitivity()
+        result = self.create_config(target_size_gb)
+        with open(cfg_out, "w", encoding="utf-8") as f:
+            json.dump(result["config"], f, indent=2)
+        self.quantize(cfg_out, output_dir)
+        return self.get_report()

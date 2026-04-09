@@ -1,0 +1,248 @@
+================================================================================
+  SE-IN-AI / AUTOQUANT — FACULTY REVIEW & VIVA PREPARATION GUIDE
+  (Print or keep this file open during your review.)
+================================================================================
+
+PART A — ONE-MINUTE ELEVATOR PITCH (say this first)
+--------------------------------------------------------------------------------
+"This project, AutoQuant, automates mixed-precision quantization for large
+language models. Instead of forcing every layer to 4-bit or 8-bit uniformly,
+it profiles each weight layer for sensitivity, then solves a budgeted allocation
+— like a knapsack problem — to assign INT4, INT8, or FP16 per layer under a
+memory target. The result is a smaller footprint in RAM and on disk while
+keeping sensitive layers at higher precision. We expose this through a Flask
+web dashboard with live progress, plus CLI scripts and a Python package under
+autoquant/."
+
+
+PART B — WHAT TO FILL IN THE BROWSER (dashboard at http://127.0.0.1:5000)
+--------------------------------------------------------------------------------
+The page is not a spreadsheet; these are the INPUT FIELDS you set before demo:
+
+  1) Hugging Face model id
+     - Safe demo default:  gpt2
+     - Meaning: which causal language model to load from the Hugging Face Hub.
+     - For review: say "We use Hugging Face transformers; gpt2 is small and
+       downloads quickly; the same pipeline works for other causal LMs that
+       expose Linear or GPT-2-style Conv1D layers."
+
+  2) Memory budget (slider, "max size after quant, GB")
+     - Example for GPT-2 (~0.23–0.30 GB in FP16):  try 0.15–0.22 for visible
+       compression; 0.30+ often keeps everything at FP16 (little change).
+     - Meaning: upper bound used by the ALLOCATOR on *estimated* total model
+       size (linear layers at chosen bits; embeddings/LayerNorm treated as FP16).
+
+  3) Calibration samples (number box)
+     - Demo default: 48 (faster).
+     - Higher (e.g. 100): slower but slightly more stable sensitivity estimates.
+     - Meaning: how many short text snippets we run forward+backward on for
+       Fisher-style gradient energy per layer.
+
+  4) Button: "Start quantization"
+     - Triggers the full pipeline in a background thread; the page polls status.
+
+GPU pill (top right): should show green + GPU name if PyTorch CUDA build matches
+your GPU. RTX 50-series needs cu128 wheels; older GPUs often use cu124 (see README).
+
+
+PART C — HOW TO RUN THE PROJECT (step-by-step for demo / lab machine)
+--------------------------------------------------------------------------------
+Prerequisites (say once to faculty):
+  - Python 3.10+ recommended; install dependencies:  pip install -r requirements.txt
+  - PyTorch with CUDA for GPU (not the default CPU-only wheel). See README.md
+    for cu128 (Blackwell / RTX 50) vs cu124 (many RTX 30/40).
+
+1) Open terminal in project folder:
+     cd path\to\SE-IN-AI
+
+2) (Optional) activate venv if you use one:
+     .\.venv\Scripts\activate
+
+3) Start the web dashboard:
+     python app.py
+
+   Console should say Waitress is serving and give http://127.0.0.1:5000
+   (No Flask "development server" warning by default — we use Waitress.)
+
+4) Open browser:  http://127.0.0.1:5000
+   Set fields as in Part B → Start quantization → wait for all pipeline steps
+   green / progress 100%.
+
+5) After run, output folder appears (e.g. quantized_model_0) with:
+     pytorch_model.bin, quantization_config.json, tokenizer files, _run_config.json
+
+6) Optional terminal sanity check (generation):
+     python evaluate.py quantized_model_0
+   (Replace folder name with what the UI shows when done.)
+
+Alternative — CLI (no browser):
+     python quantize.py --model gpt2 --target 0.18 --output my_quantized
+     python evaluate.py my_quantized
+
+Alternative — quick script:
+     python test_direct.py
+   (Writes config.json and quantized_test/; longer run if num_samples high.)
+
+
+PART D — HOW TO EXPLAIN THE SYSTEM TO FACULTY (structured talk track)
+--------------------------------------------------------------------------------
+1) PROBLEM
+   - LLMs are large; uniform low-bit quantization hurts accuracy.
+   - We want automatic, budget-aware per-layer precision.
+
+2) PIPELINE (match the four steps on screen)
+   Step 1 — Load model: Hugging Face AutoModelForCausalLM + tokenizer, FP16,
+            moved to CUDA if available.
+   Step 2 — Sensitivity: For each calibration sentence, causal LM loss, backward;
+            accumulate mean squared gradient on each weight matrix (Fisher-style
+            proxy). Normalize scores to [0,1] per layer.
+   Step 3 — Allocate bits: Greedy knapsack — start all quantizable layers at
+            minimum bits (4), sort by sensitivity descending, upgrade 4→8→16
+            while estimated total size ≤ budget. Embeddings/LayerNorm stay FP16.
+   Step 4 — Quantize & save: Replace eligible layers with DynamicQuantizedLinear
+            (integer weights + per-output-channel FP16 scale); save state_dict,
+            tokenizer, and quantization_config.json for evaluate.py.
+
+3) WHAT THE "NUMBERS" SECTION MEANS
+   - Logical parameters: total parameter count — quantization does NOT remove
+     weights; it changes how they are stored.
+   - Quantizable weight params: subset in Linear / GPT-2 Conv1D layers we can
+     assign bit widths to.
+   - Weighted avg bits: average bit width across those weights after the plan.
+   - Footprint bars: RAM-style size (parameters + buffers) before vs after.
+
+4) LIMITATIONS (honest — faculty like this)
+   - Not the same as GPTQ/AWQ production stacks; no activation quantization here.
+   - Sensitivity is a cheap proxy, not full Hessian.
+   - Very tight budgets can assign many layers to INT4; quality may drop.
+   - TensorRT / llama.cpp export mentioned in build guide are not implemented.
+
+5) CONTRIBUTIONS YOU CAN CLAIM
+   - End-to-end mixed-precision allocation from sensitivity + budget.
+   - Working UI with step visibility and GPU diagnostics.
+   - GPT-2 Conv1D handled by converting to Linear for consistent quantization.
+
+
+PART E — WHICH FILES TO OPEN IF ASKED "SHOW ME THE CODE"
+--------------------------------------------------------------------------------
+Order suggested for live walkthrough:
+
+  1) autoquant/quantizer.py
+     - Class AutoQuantizer: orchestrates load → analyze_sensitivity →
+       create_config → quantize.
+     - Class DynamicQuantizedLinear: per-channel symmetric quant, buffers
+       weight_q, scale, bias; forward dequantizes then F.linear.
+
+  2) autoquant/sensitivity.py
+     - compute_sensitivity(): calibration loop, loss.backward(), grad^2 mean
+       per quantizable module.
+
+  3) autoquant/allocator.py
+     - allocate_bits(): BIT_WIDTH_OPTIONS, estimate_layer_size_bytes,
+       greedy upgrade loop, non-linear (Embedding/LayerNorm) fixed at FP16.
+
+  4) autoquant/utils.py
+     - compute_model_size_gb, get_device, gpu_info_dict, model_parameter_stats,
+       is_quantizable_weight_module / as_linear_for_quantize (GPT-2 Conv1D).
+
+  5) app.py
+     - Flask routes: / dashboard, /api/system, /api/quantize, /api/status.
+     - Background job updates task dict with steps, stats, log_lines.
+
+  6) evaluate.py
+     - Loads base model from quantization_config.json model_name, rebuilds
+       DynamicQuantizedLinear layers, loads pytorch_model.bin, generate().
+
+  7) quantize.py — CLI entry.
+  8) templates/index.html — dashboard layout and polling JS (if UI questions).
+
+  9) README.md + AUTOQUANT_BUILD_GUIDE.md — documentation (theory / structure).
+
+
+PART F — VIVA QUESTIONS AND SAMPLE ANSWERS
+--------------------------------------------------------------------------------
+Q1: What is quantization in one sentence?
+A:  Reducing numeric precision of weights (and sometimes activations) so the
+    model uses less memory and can run faster on hardware that supports low-bit
+    ops, with some accuracy tradeoff.
+
+Q2: Why mixed precision instead of all 4-bit?
+A:  Some layers are more sensitive to noise; giving them more bits preserves
+    quality while still compressing less critical layers aggressively.
+
+Q3: What is your sensitivity metric?
+A:  We approximate Fisher information via mean squared gradients of the loss
+    w.r.t. each weight matrix over calibration inputs — cheap compared to full
+    Hessian, correlates with which weights matter more for the loss.
+
+Q4: Why do you call allocation a "knapsack"?
+A:  Each layer has a "cost" (extra bytes when we raise bit width) and a
+    "value" (we prioritize high-sensitivity layers first when spending budget).
+    We greedily upgrade layers under a total size cap — a standard relaxation of
+    knapsack-style resource allocation.
+
+Q5: Why per-channel (per output row) scale for quantized Linear?
+A:  Weight rows can have very different magnitudes (outliers). One global scale
+    would waste range for small rows; per-channel scale uses the INT range better.
+
+Q6: Does quantization reduce the number of parameters?
+A:  No — same number of weights. We store them in fewer bits (INT + scales), so
+    memory and disk shrink; the UI states this explicitly.
+
+Q7: What are buffers vs parameters in DynamicQuantizedLinear?
+A:  weight_q and scale are register_buffer — saved in state_dict, moved with
+    .to(device), but not updated by optimizers as trainable parameters.
+
+Q8: How does GPT-2 differ from LLaMA in your code?
+A:  GPT-2 uses Conv1D modules for some projections; we convert them to nn.Linear
+    for a uniform quantization path. Many newer models use nn.Linear throughout.
+
+Q9: What does evaluate.py do differently from training code?
+A:  It reconstructs the model architecture from the base HF name, swaps in
+    quantized linear modules, loads saved buffers, and runs inference.
+
+Q10: What if torch.cuda.is_available() is True but kernels fail?
+A:  Wrong PyTorch build for GPU architecture — e.g. Blackwell sm_120 needs
+     PyTorch cu128+; cu124 wheels may cap at sm_90. Install matching wheels
+     (see README).
+
+Q11: Is this secure for production deployment?
+A:  The app uses Waitress for serving, but we still would add HTTPS, auth,
+    rate limits, and sandboxed model paths for real production.
+
+Q12: How would you validate quality beyond a short generate()?
+A:  Perplexity on WikiText/C4, zero-shot benchmarks, or task-specific eval;
+    compare FP16 baseline vs quantized.
+
+Q13: What is the complexity bottleneck?
+A:  Sensitivity: O(num_samples × forward × backward × model size). Allocation is
+    cheap. Quantization is one pass over layers.
+
+Q14: What would you improve next?
+A:  Activation-aware methods (AWQ), block-wise GPTQ, better calibration data,
+    export to ONNX/TensorRT/llama.cpp, and formal perplexity in the UI.
+
+
+PART G — CHECKLIST THE NIGHT BEFORE
+--------------------------------------------------------------------------------
+[ ] pip install -r requirements.txt works
+[ ] python -c "import torch; print(torch.cuda.is_available()); x=torch.randn(100,100,device='cuda'); print((x@x).sum())"  succeeds on demo laptop
+[ ] python app.py starts without error; browser loads dashboard
+[ ] GPU pill shows green + GPU name
+[ ] One full quantization run completes (or record a screen capture if Wi‑Fi slow)
+[ ] Know output folder name and run evaluate.py once
+[ ] Open quantizer.py and allocator.py in IDE tabs for quick navigation
+
+
+PART H — IF SOMETHING FAILS DURING THE REVIEW
+--------------------------------------------------------------------------------
+  - "Hugging Face rate limit" → set HF_TOKEN or use a model already cached.
+  - "Out of memory" → smaller model (gpt2), fewer calibration samples, close
+    other GPU apps.
+  - "Browser can't connect" → confirm app.py still running, correct port 5000.
+  - "All layers stayed FP16" → memory budget too loose; lower the GB slider.
+
+
+================================================================================
+End of REVIEW_PREP.txt — Good luck tomorrow.
+================================================================================

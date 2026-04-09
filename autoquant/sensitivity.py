@@ -1,82 +1,96 @@
+"""
+Sensitivity Profiler
+Ranks each linear layer by how much quantization noise would hurt the model.
+Uses Fisher Information (gradient^2 approximation) on calibration text samples.
+"""
+
+from typing import Callable, Dict, Optional
+
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-import numpy as np
+from tqdm import tqdm
+
+from .utils import is_quantizable_weight_module
+
+CALIBRATION_TEXT = [
+    "The quick brown fox jumps over the lazy dog.",
+    "Artificial intelligence is transforming the world of software engineering.",
+    "Large language models require significant memory to run inference.",
+    "Quantization reduces model size while preserving most of the accuracy.",
+    "The transformer architecture relies on attention mechanisms.",
+    "Machine learning systems improve with more data and careful engineering.",
+    "Neural networks approximate functions by composing linear layers and nonlinearities.",
+    "Efficient deployment of LLMs requires compression and hardware-aware optimization.",
+]
 
 
-class MultiMetricSensitivityAnalyzer:
-    def __init__(self, model, device="cuda"):
-        self.model = model
-        self.device = device if torch.cuda.is_available() else "cpu"
-        self.model.to(self.device)
+def compute_sensitivity(
+    model: nn.Module,
+    tokenizer,
+    num_samples: int = 100,
+    device: str = "cpu",
+    progress_callback: Optional[Callable[[int, int, str], None]] = None,
+) -> Dict[str, float]:
+    """
+    Compute per-layer sensitivity scores using Fisher Information approximation.
 
-    def _get_layers(self):
-        return [(n, m) for n, m in self.model.named_modules() if isinstance(m, nn.Linear)]
+    For each nn.Linear layer, this accumulates the squared gradient of the loss
+    w.r.t. the weight matrix across calibration samples. The mean squared gradient
+    magnitude serves as a proxy for how sensitive that layer is to perturbation.
 
-    def _hessian(self, module):
-        w = module.weight
-        v = torch.randn_like(w)
+    Args:
+        model: HuggingFace causal LM (already loaded, FP16 or FP32)
+        tokenizer: Matching tokenizer
+        num_samples: Number of calibration forward passes
+        device: "cpu" or "cuda"
 
-        w.requires_grad_(True)
-        loss = (w * v).sum()
+    Returns:
+        Dict mapping layer name -> normalized sensitivity score [0.0, 1.0]
+    """
+    model.eval()
+    model.to(device)
 
-        g = torch.autograd.grad(loss, w, create_graph=True)[0]
-        hv = torch.autograd.grad(g, w, grad_outputs=v)[0]
+    sensitivity_accum: Dict[str, float] = {}
 
-        return float((v * hv).sum().abs() / (w.numel() + 1e-6))
+    for name, module in model.named_modules():
+        if is_quantizable_weight_module(module):
+            sensitivity_accum[name] = 0.0
 
-    def _fisher(self, inputs, module):
-        self.model.zero_grad()
+    texts = (CALIBRATION_TEXT * ((num_samples // len(CALIBRATION_TEXT)) + 1))[
+        :num_samples
+    ]
 
-        outputs = self.model(**inputs)
-        logits = outputs.logits
-        targets = inputs["input_ids"]
+    n_texts = len(texts)
+    if progress_callback is None:
+        text_iter = enumerate(tqdm(texts, desc="Computing sensitivity"))
+    else:
+        text_iter = enumerate(texts)
 
-        loss = F.cross_entropy(
-            logits.view(-1, logits.size(-1)),
-            targets.view(-1)
-        )
-
-        loss.backward(retain_graph=True)
-
-        if module.weight.grad is None:
-            return 0.5
-
-        return float((module.weight.grad ** 2).mean())
-
-    def _gptq(self, module):
-        w = module.weight.data.float()
-        sample = w.flatten()[:10000]
-
-        errors = []
-        for bits in [2, 4, 8]:
-            max_val = sample.abs().max()
-            scale = max_val / (2**(bits-1)-1 + 1e-8)
-            q = torch.round(sample / scale)
-            dq = q * scale
-            errors.append(F.mse_loss(dq, sample).item())
-
-        return float(np.mean(errors))
-
-    def analyze(self, texts, tokenizer):
+    for i, text in text_iter:
         inputs = tokenizer(
-            texts,
-            return_tensors="pt",
-            padding=True,
-            truncation=True,
-            max_length=64
-        ).to(self.device)
+            text, return_tensors="pt", truncation=True, max_length=128
+        ).to(device)
 
-        scores = {}
+        model.zero_grad()
 
-        for name, module in self._get_layers():
-            try:
-                h = self._hessian(module)
-                f = self._fisher(inputs, module)
-                g = self._gptq(module)
+        outputs = model(**inputs, labels=inputs["input_ids"])
+        loss = outputs.loss
+        loss.backward()
 
-                scores[name] = (0.4*h + 0.3*f + 0.3*g)
-            except:
-                scores[name] = 0.5
+        for name, module in model.named_modules():
+            if is_quantizable_weight_module(module) and module.weight.grad is not None:
+                grad_sq = module.weight.grad.detach().pow(2).mean().item()
+                sensitivity_accum[name] += grad_sq
 
-        return scores
+        if progress_callback is not None:
+            progress_callback(i + 1, n_texts, "sensitivity")
+
+    max_val = max(sensitivity_accum.values()) if sensitivity_accum else 1.0
+    if max_val == 0:
+        max_val = 1.0
+
+    normalized = {name: score / max_val for name, score in sensitivity_accum.items()}
+
+    model.zero_grad()
+
+    return normalized

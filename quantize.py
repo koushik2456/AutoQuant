@@ -25,7 +25,7 @@ def main():
         print(f"   VRAM: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
     
     quantizer = AutoQuantizer(args.model)
-    sensitivity = quantizer.analyze_sensitivity()
+    quantizer.analyze_sensitivity()
     config_result = quantizer.create_config(args.target)
     
     if args.analyze_only:
@@ -34,8 +34,8 @@ def main():
     else:
         # Save config and quantize
         import json
-        with open("config.json", "w") as f:
-            json.dump(config_result['config'], f, indent=2)
+        with open("config.json", "w", encoding="utf-8") as f:
+            json.dump(config_result["config"], f, indent=2)
         
         quantizer.quantize("config.json", args.output)
         report = quantizer.get_report()

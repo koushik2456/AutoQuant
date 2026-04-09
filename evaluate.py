@@ -2,35 +2,18 @@
 Quick evaluation of structurally quantized model
 """
 
+import autoquant  # noqa: F401 — configure UTF-8 stdout on Windows before other prints
+
+import json
+import os
+import sys
+
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from transformers import AutoModelForCausalLM, AutoTokenizer
-import sys
-import os
-import json
 
-# We must define the layer locally so the torch.load state_dict keys match
-class DynamicQuantizedLinear(nn.Module):
-    def __init__(self, original_linear: nn.Linear, bits: int):
-        super().__init__()
-        self.in_features = original_linear.in_features
-        self.out_features = original_linear.out_features
-        self.bits = bits
-        
-        # initialize dummy buffers to hold the loaded weights
-        # we don't need to recalculate them, load_state_dict will fill these!
-        self.register_buffer('weight_q', torch.zeros((self.out_features, self.in_features), dtype=torch.int8))
-        self.register_buffer('scale', torch.zeros((self.out_features, 1), dtype=torch.float16))
-        
-        if original_linear.bias is not None:
-             self.register_buffer('bias', torch.zeros(self.out_features, dtype=torch.float16))
-        else:
-             self.register_parameter('bias', None)
-             
-    def forward(self, x):
-        weight_deq = self.weight_q.to(self.scale.dtype) * self.scale
-        return F.linear(x, weight_deq, self.bias)
+from autoquant.quantizer import DynamicQuantizedLinear
+from autoquant.utils import as_linear_for_quantize, is_quantizable_weight_module
 
 def _replace_module_in_model(parent_module, target_name, new_module):
     parts = target_name.split('.')
@@ -70,10 +53,12 @@ def evaluate(model_path):
     assignments = quant_config.get('bit_assignments', {})
     replaced_count = 0
     for name, bits in assignments.items():
+        bits = int(bits)
         for module_name, module in list(model.named_modules()):
-            if module_name == name and isinstance(module, nn.Linear):
+            if module_name == name and is_quantizable_weight_module(module):
                 if bits < 16:
-                    new_layer = DynamicQuantizedLinear(module, bits)
+                    lin = as_linear_for_quantize(module)
+                    new_layer = DynamicQuantizedLinear(lin, bits)
                     _replace_module_in_model(model, module_name, new_layer)
                     replaced_count += 1
                 break
@@ -83,7 +68,12 @@ def evaluate(model_path):
     # 2. State Loading
     checkpoint_file = os.path.join(model_path, "pytorch_model.bin")
     print(f"💾 Loading packed weights from {checkpoint_file} into geometry...")
-    state_dict = torch.load(checkpoint_file, map_location="cpu")
+    try:
+        state_dict = torch.load(
+            checkpoint_file, map_location="cpu", weights_only=True
+        )
+    except TypeError:
+        state_dict = torch.load(checkpoint_file, map_location="cpu")
     model.load_state_dict(state_dict)
     
     tokenizer = AutoTokenizer.from_pretrained(model_path)
