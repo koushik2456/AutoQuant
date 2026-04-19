@@ -11,6 +11,30 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
+### Cursor / VS Code: “Import could not be resolved” (Pylance / basedpyright)
+
+The editor must use the **same Python** where you ran `pip install -r requirements.txt`.
+
+1. **Command Palette** (`Ctrl+Shift+P`) → **Python: Select Interpreter**.
+2. Pick **Python 3.12.x** (or your venv: `.venv\Scripts\python.exe` after you create it).
+3. **Developer: Reload Window** if squiggles remain.
+
+This repo sets `python.defaultInterpreterPath` to `${workspaceFolder}/.venv/Scripts/python.exe`. After creating `.venv` and installing requirements there, analysis errors should clear. If Windows blocks `.venv` scripts, select your global interpreter that already has `torch`, `flask`, and `transformers` installed.
+
+**Prove which interpreter runs:** from the repo root:
+
+```bash
+python scripts/check_python_env.py
+```
+
+That prints `sys.executable`, `torch` / CUDA info, and whether `transformers` / `flask` import. Pick that exact interpreter in the IDE.
+
+If **Windows Application Control** blocks `pip.exe`, install with:
+
+```bash
+python -m pip install -r requirements.txt
+```
+
 ```bash
 # Analyze + quantize + save to quantized_model/
 python quantize.py --model gpt2 --target 0.15 --output quantized_gpt2
@@ -21,6 +45,16 @@ python test_direct.py
 # Load checkpoint and generate text
 python evaluate.py quantized_gpt2
 ```
+
+### Testing after quantization (what actually happens)
+
+1. **Artifacts on disk** — The run writes a **folder under the project root** (for example `quantized_model_0/`) containing `pytorch_model.bin`, `quantization_config.json`, tokenizer files, and `_run_config.json` (bit plan used when packing weights).
+
+2. **`evaluate.py`** — Loads the **same** Hugging Face architecture as the base model, replaces eligible `nn.Linear` modules with the project’s quantized linear implementation, loads packed weights from `pytorch_model.bin`, then runs **one short `generate()`** from your prompt. It prints timing, device, and a text sample. This is a **smoke test**, not a full benchmark (no perplexity sweep in-repo).
+
+3. **Dashboard** — After a job finishes, the UI shows an **“After quantization — how to test”** card: the saved folder name, the exact CLI command, and a button that calls **`POST /api/evaluate`** with the same logic as the CLI.
+
+4. **API** — `POST /api/evaluate` with JSON `{ "output_dir": "<folder_name>", "prompt": "...", "max_new_tokens": 48 }` returns a JSON object (`ok`, `generated_text`, `seconds`, errors if any).
 
 ## Conda + Jupyter
 
@@ -61,12 +95,22 @@ python -c "import torch; t=torch.randn(256,256,device='cuda'); print((t@t).sum()
 
 `POST /api/quantize` JSON body:
 
-- `model_name` (required), e.g. `"gpt2"`
-- `target_size_gb` (default `0.5`)
-- `num_samples` (default `100`)
-- `output_dir` (default `quantized_model_<task_id>`)
+- `model_name` (required), e.g. `"gpt2"` or `"facebook/opt-125m"`
+- `target_size_gb` (default `0.2`)
+- `num_samples` (integer, clamped **4–200**)
+- `output_dir` (optional) — **single folder name** under the project root (no paths, no `..`). Default: `quantized_model_<task_id>`.
 
-`GET /api/status/<task_id>` returns `running` | `done` | `error` and optional `report`.
+`GET /api/status/<task_id>` returns `running` | `done` | `error`, `log_lines`, `stats`, and when finished: `output_dir`, `evaluate_cli`, `evaluate_api_hint`.
+
+**Single-flight:** only one quantization job at a time. A second `POST /api/quantize` while one is running returns **429** with a clear error.
+
+`GET /api/health` — `project_root`, free disk (GB), and merged GPU / torch fields (same shape as device diagnostics).
+
+`GET /api/tasks` — short summaries of tasks held in memory for this server process.
+
+`POST /api/evaluate` — body `{ "output_dir": "quantized_model_0", "prompt": "...", "max_new_tokens": 40, "do_sample": true }`; folder must exist under project root.
+
+`GET /api/ollama/models` — **optional** (phase D1): lists tag names from a local Ollama daemon (`OLLAMA_HOST` or `http://127.0.0.1:11434`). AutoQuant checkpoints are Hugging Face–format, not Ollama GGUF; this endpoint is only for convenience when Ollama is installed separately.
 
 ## Layout
 

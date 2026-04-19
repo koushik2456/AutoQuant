@@ -12,6 +12,18 @@ def main():
     parser.add_argument("--model", "-m", default="gpt2", help="Model name")
     parser.add_argument("--target", "-t", type=float, default=0.5, help="Target size in GB")
     parser.add_argument("--output", "-o", default="quantized_model", help="Output directory")
+    parser.add_argument(
+        "--samples",
+        "-n",
+        type=int,
+        default=100,
+        help="Sensitivity calibration samples (4–200)",
+    )
+    parser.add_argument(
+        "--config-out",
+        default="config.json",
+        help="Path to write full config JSON before quantize",
+    )
     parser.add_argument("--analyze-only", "-a", action="store_true", help="Only analyze")
     
     args = parser.parse_args()
@@ -25,7 +37,8 @@ def main():
         print(f"   VRAM: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
     
     quantizer = AutoQuantizer(args.model)
-    quantizer.analyze_sensitivity()
+    n = max(4, min(int(args.samples), 200))
+    quantizer.analyze_sensitivity(num_samples=n)
     config_result = quantizer.create_config(args.target)
     
     if args.analyze_only:
@@ -34,10 +47,12 @@ def main():
     else:
         # Save config and quantize
         import json
-        with open("config.json", "w", encoding="utf-8") as f:
+
+        cfg_path = args.config_out
+        with open(cfg_path, "w", encoding="utf-8") as f:
             json.dump(config_result["config"], f, indent=2)
-        
-        quantizer.quantize("config.json", args.output)
+
+        quantizer.quantize(cfg_path, args.output)
         report = quantizer.get_report()
         
         print("\n" + "="*60)

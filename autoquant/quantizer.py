@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Callable, Dict, Optional
+from typing import Callable, Dict, Optional, cast
 
 import torch
 import torch.nn as nn
@@ -37,6 +37,10 @@ class DynamicQuantizedLinear(nn.Module):
     dequantized on the fly: weight_fp = weight_int * scale.
     """
 
+    weight_q: torch.Tensor
+    scale: torch.Tensor
+    bias: torch.Tensor | None
+
     def __init__(self, original_linear: nn.Linear, bits: int):
         super().__init__()
         self.in_features = original_linear.in_features
@@ -59,10 +63,10 @@ class DynamicQuantizedLinear(nn.Module):
         if original_linear.bias is not None:
             self.register_buffer("bias", original_linear.bias.data.to(torch.float16))
         else:
-            self.register_parameter("bias", None)
+            self.register_buffer("bias", None)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        weight_deq = self.weight_q.to(self.scale.dtype) * self.scale
+        weight_deq = self.weight_q.to(dtype=self.scale.dtype) * self.scale
         return F.linear(x, weight_deq, self.bias)
 
     def extra_repr(self) -> str:
@@ -104,7 +108,8 @@ class AutoQuantizer:
             torch_dtype=torch.float16,
             low_cpu_mem_usage=True,
         )
-        self.model.to(self.device)
+        cast(nn.Module, self.model).to(torch.device(self.device))
+        self.model.eval()
 
         self.original_size = compute_model_size_gb(self.model)
         print(f"   Original size: {self.original_size:.3f} GB")
@@ -219,6 +224,8 @@ class AutoQuantizer:
                     break
 
         print(f"   Replaced {replaced} layers with INT-backed quantized layers")
+
+        self.model.eval()
 
         weights_path = os.path.join(output_dir, "pytorch_model.bin")
         print(f"💾 Saving weights to {weights_path}...")

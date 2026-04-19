@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AutoQuant — Chat lab</title>
+  <style>
+    :root {
+      --bg: #0c0c12;
+      --surface: #14141f;
+      --card: #1a1a28;
+      --border: #2a2a3c;
+      --text: #e8e8ef;
+      --muted: #9898a8;
+      --accent: #5b8def;
+      --ok: #3ecf8e;
+      --radius: 14px;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: "Segoe UI", system-ui, sans-serif;
+      background: radial-gradient(1200px 600px at 10% -10%, #1a1a40 0%, transparent 55%), var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      line-height: 1.5;
+    }
+    .wrap { max-width: 960px; margin: 0 auto; padding: 24px 20px 40px; }
+    header { margin-bottom: 20px; display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; align-items: center; }
+    h1 { font-size: 1.5rem; font-weight: 650; }
+    a.back { color: var(--accent); text-decoration: none; font-size: 0.9rem; }
+    a.back:hover { text-decoration: underline; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 18px 20px;
+      margin-bottom: 16px;
+    }
+    .card h2 { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin-bottom: 12px; }
+    label { display: block; font-size: 0.82rem; color: var(--muted); margin-bottom: 6px; }
+    input, select, textarea {
+      width: 100%;
+      padding: 10px 12px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text);
+      font-size: 0.95rem;
+    }
+    textarea { min-height: 72px; resize: vertical; font-family: inherit; }
+    .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    @media (max-width: 640px) { .row2 { grid-template-columns: 1fr; } }
+    .btn {
+      margin-top: 10px;
+      padding: 11px 16px;
+      border: none;
+      border-radius: 10px;
+      font-weight: 600;
+      cursor: pointer;
+      background: linear-gradient(135deg, var(--accent), #7c5cff);
+      color: #fff;
+      font-size: 0.95rem;
+    }
+    .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+    .btn-secondary {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--text);
+    }
+    .btn-row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+    .thread {
+      min-height: 220px;
+      max-height: 50vh;
+      overflow-y: auto;
+      padding: 12px;
+      background: #08080e;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      font-size: 0.9rem;
+    }
+    .msg { margin-bottom: 12px; padding: 10px 12px; border-radius: 10px; max-width: 92%; }
+    .msg.user { background: #1e2a44; margin-left: auto; }
+    .msg.bot { background: var(--surface); border: 1px solid var(--border); }
+    .msg .role { font-size: 0.7rem; color: var(--muted); margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.06em; }
+    .err { color: #f07178; font-size: 0.88rem; margin-top: 8px; }
+    .hint { font-size: 0.82rem; color: var(--muted); margin-top: 8px; }
+    .chart-box {
+      background: #08080e;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px;
+      min-height: 220px;
+    }
+    .chart-box .cap { font-size: 0.72rem; color: var(--muted); margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.06em; }
+  </style>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" crossorigin="anonymous"></script>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>Chat lab</h1>
+      <a class="back" href="/">← Dashboard</a>
+    </header>
+
+    <div class="card">
+      <h2>Quantized checkpoint (Hugging Face)</h2>
+      <label for="qDir">Output folder (under project root)</label>
+      <input type="text" id="qDir" placeholder="quantized_model_0" autocomplete="off">
+      <p class="hint">Uses your saved <code>pytorch_model.bin</code> + <code>quantization_config.json</code>. Same engine as the dashboard evaluation.</p>
+      <div class="thread" id="qThread"></div>
+      <label for="qInput" style="margin-top:12px">Message</label>
+      <textarea id="qInput" placeholder="Ask something…"></textarea>
+      <div class="btn-row">
+        <button type="button" class="btn" id="qSend">Send (quantized)</button>
+      </div>
+      <div class="err" id="qErr" style="display:none"></div>
+    </div>
+
+    <div class="card">
+      <h2>Accuracy proxy (infographic)</h2>
+      <p class="hint">Compares next-token loss on a short calibration string: FP16 reference vs your quantized checkpoint (not a full accuracy benchmark).</p>
+      <button type="button" class="btn-secondary" id="labQualityBtn">Run loss comparison &amp; draw charts</button>
+      <p class="hint" id="labQualityStatus" style="margin-top:10px"></p>
+      <div id="labQualityCharts" class="row2" style="display:none;margin-top:14px">
+        <div class="chart-box">
+          <div class="cap">Cross-entropy (lower is better)</div>
+          <canvas id="labLossChart" height="200"></canvas>
+        </div>
+        <div class="chart-box">
+          <div class="cap">Signed Δ vs FP16 (%) — up worse, down better</div>
+          <canvas id="labDeltaChart" height="200"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Ollama (reference — same machine)</h2>
+      <div class="row2">
+        <div>
+          <label for="oModel">Ollama model name</label>
+          <input type="text" id="oModel" placeholder="llama3.2" value="llama3.2" autocomplete="off">
+        </div>
+        <div>
+          <label for="oPull">&nbsp;</label>
+          <button type="button" class="btn btn-secondary" id="oPull" style="margin-top:0;width:100%">Pull model</button>
+        </div>
+      </div>
+      <p class="hint" id="oPullHint"></p>
+      <div class="thread" id="oThread"></div>
+      <label for="oInput" style="margin-top:12px">Message</label>
+      <textarea id="oInput" placeholder="Same question for comparison…"></textarea>
+      <div class="btn-row">
+        <button type="button" class="btn btn-secondary" id="oSend">Send (Ollama)</button>
+      </div>
+      <div class="err" id="oErr" style="display:none"></div>
+    </div>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+
+    const params = new URLSearchParams(window.location.search);
+    const od = params.get("output_dir") || params.get("dir") || "";
+    if (od) $("qDir").value = od;
+
+    function addMsg(threadId, role, text, cls) {
+      const th = $(threadId);
+      const div = document.createElement("div");
+      div.className = "msg " + cls;
+      div.innerHTML = '<div class="role">' + role + "</div><div>" + escapeHtml(text) + "</div>";
+      th.appendChild(div);
+      th.scrollTop = th.scrollHeight;
+    }
+    function escapeHtml(s) {
+      const d = document.createElement("div");
+      d.textContent = s;
+      return d.innerHTML;
+    }
+
+    $("qSend").addEventListener("click", async () => {
+      const dir = ($("qDir").value || "").trim();
+      const msg = ($("qInput").value || "").trim();
+      $("qErr").style.display = "none";
+      if (!dir || !msg) {
+        $("qErr").style.display = "block";
+        $("qErr").textContent = "Folder and message required.";
+        return;
+      }
+      addMsg("qThread", "You", msg, "user");
+      $("qInput").value = "";
+      $("qSend").disabled = true;
+      try {
+        const r = await fetch("/api/chat/quantized", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            output_dir: dir,
+            message: msg,
+            max_new_tokens: 256,
+            do_sample: false,
+          }),
+        });
+        const j = await r.json();
+        if (!j.ok) {
+          $("qErr").style.display = "block";
+          $("qErr").textContent = j.error || "Request failed";
+          return;
+        }
+        addMsg("qThread", "Quantized model", j.reply || j.full_text || "", "bot");
+      } catch (e) {
+        $("qErr").style.display = "block";
+        $("qErr").textContent = String(e);
+      } finally {
+        $("qSend").disabled = false;
+      }
+    });
+
+    $("oPull").addEventListener("click", async () => {
+      const name = ($("oModel").value || "").trim();
+      $("oPullHint").textContent = name ? "Pulling (can take a while)…" : "";
+      $("oErr").style.display = "none";
+      if (!name) return;
+      $("oPull").disabled = true;
+      try {
+        const r = await fetch("/api/ollama/pull", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ model: name }),
+        });
+        const j = await r.json();
+        $("oPullHint").textContent = j.ok
+          ? ("Done (" + (j.via || "ok") + ").")
+          : ("Pull failed: " + (j.error || "unknown"));
+      } catch (e) {
+        $("oPullHint").textContent = "Error: " + e;
+      } finally {
+        $("oPull").disabled = false;
+      }
+    });
+
+    let labLossChart = null;
+    let labDeltaChart = null;
+
+    $("labQualityBtn").addEventListener("click", async () => {
+      const dir = ($("qDir").value || "").trim();
+      $("labQualityStatus").textContent = "";
+      if (!dir) {
+        $("labQualityStatus").textContent = "Set the output folder above first.";
+        return;
+      }
+      $("labQualityBtn").disabled = true;
+      $("labQualityStatus").textContent = "Computing (loads FP16 + quantized; can take several minutes on large models)…";
+      try {
+        const r = await fetch("/api/metrics/quality", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ output_dir: dir }),
+        });
+        const j = await r.json();
+        if (!j.ok) {
+          $("labQualityStatus").textContent = j.error || "Failed";
+          return;
+        }
+        $("labQualityStatus").textContent =
+          "FP16 loss " + j.loss_fp16 + " · Quantized " + j.loss_quantized +
+          (j.relative_loss_increase_percent != null
+            ? " · Δ " + j.relative_loss_increase_percent + "% vs FP16"
+            : "");
+        const cd = j.chart_data;
+        if (typeof Chart !== "undefined" && cd && cd.loss_bar) {
+          $("labQualityCharts").style.display = "grid";
+          if (labLossChart) labLossChart.destroy();
+          if (labDeltaChart) labDeltaChart.destroy();
+          labLossChart = new Chart($("labLossChart").getContext("2d"), {
+            type: "bar",
+            data: {
+              labels: cd.loss_bar.labels,
+              datasets: [{ data: cd.loss_bar.values, backgroundColor: ["#5b8defcc", "#e8b44ccc"] }],
+            },
+            options: {
+              scales: {
+                x: { ticks: { color: "#9898a8" }, grid: { color: "#2a2a3c" } },
+                y: { beginAtZero: true, ticks: { color: "#9898a8" }, grid: { color: "#2a2a3c" } },
+              },
+              plugins: { legend: { display: false } },
+            },
+          });
+          const dVal = cd.relative_loss_increase_percent != null ? cd.relative_loss_increase_percent : 0;
+          const pad = Math.max(1.5, Math.abs(dVal) * 0.35, 0.5);
+          const yMin = Math.min(0, dVal) - pad;
+          const yMax = Math.max(0, dVal) + pad;
+          let barColor = "#3ecf8ecc";
+          if (dVal > 15) barColor = "#f07178cc";
+          else if (dVal > 5) barColor = "#e8b44ccc";
+          else if (dVal > 0.5) barColor = "#e8b44c99";
+          else if (dVal < -0.5) barColor = "#5b8defcc";
+          labDeltaChart = new Chart($("labDeltaChart").getContext("2d"), {
+            type: "bar",
+            data: {
+              labels: ["Δ vs FP16"],
+              datasets: [{
+                label: "% vs FP16 (signed)",
+                data: [dVal],
+                backgroundColor: barColor,
+              }],
+            },
+            options: {
+              scales: {
+                x: { ticks: { color: "#9898a8" }, grid: { color: "#2a2a3c" } },
+                y: {
+                  min: yMin,
+                  max: yMax,
+                  ticks: { color: "#9898a8" },
+                  grid: { color: "#2a2a3c" },
+                  title: { display: true, text: "% (0 = same)", color: "#9898a8" },
+                },
+              },
+              plugins: { legend: { display: false } },
+            },
+          });
+        }
+      } catch (e) {
+        $("labQualityStatus").textContent = String(e);
+      } finally {
+        $("labQualityBtn").disabled = false;
+      }
+    });
+
+    $("oSend").addEventListener("click", async () => {
+      const model = ($("oModel").value || "").trim();
+      const msg = ($("oInput").value || "").trim();
+      $("oErr").style.display = "none";
+      if (!model || !msg) {
+        $("oErr").style.display = "block";
+        $("oErr").textContent = "Model name and message required.";
+        return;
+      }
+      addMsg("oThread", "You", msg, "user");
+      $("oInput").value = "";
+      $("oSend").disabled = true;
+      try {
+        const r = await fetch("/api/ollama/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ model: model, message: msg }),
+        });
+        const j = await r.json();
+        if (!j.ok) {
+          $("oErr").style.display = "block";
+          $("oErr").textContent = j.error || "Ollama request failed";
+          return;
+        }
+        addMsg("oThread", "Ollama", j.content || "", "bot");
+      } catch (e) {
+        $("oErr").style.display = "block";
+        $("oErr").textContent = String(e);
+      } finally {
+        $("oSend").disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

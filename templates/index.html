@@ -106,6 +106,55 @@
       color: #fff;
     }
     .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+    .btn-row { display: flex; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
+    .btn-secondary {
+      flex: 1;
+      min-width: 140px;
+      padding: 10px 14px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text);
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .btn-secondary:hover { border-color: var(--accent); color: var(--accent); }
+    a.btn-secondary {
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    details.advanced {
+      margin-top: 14px;
+      padding: 12px 14px;
+      background: var(--surface);
+      border-radius: 10px;
+      border: 1px solid var(--border);
+    }
+    details.advanced summary { cursor: pointer; font-weight: 600; color: var(--muted); }
+    details.advanced .inner { margin-top: 12px; display: flex; flex-direction: column; gap: 12px; }
+    select#modelPreset {
+      width: 100%;
+      padding: 11px 14px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text);
+      font-size: 0.95rem;
+    }
+    #evalOut {
+      margin-top: 12px;
+      padding: 12px;
+      background: #08080e;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      font-size: 0.78rem;
+      color: #c8e6c9;
+      white-space: pre-wrap;
+      max-height: 220px;
+      overflow: auto;
+    }
     .steps { display: flex; flex-direction: column; gap: 0; }
     .step {
       display: grid;
@@ -201,7 +250,33 @@
       color: #ffb4b8;
       font-size: 0.88rem;
     }
+    .estimate-box {
+      margin-top: 12px;
+      padding: 12px 14px;
+      border-radius: 10px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      font-size: 0.88rem;
+      color: var(--muted);
+    }
+    .estimate-box strong { color: var(--text); }
+    .chart-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      margin-top: 14px;
+    }
+    @media (max-width: 720px) { .chart-grid { grid-template-columns: 1fr; } }
+    .chart-wrap {
+      background: #08080e;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px;
+      min-height: 220px;
+    }
+    .chart-wrap h4 { font-size: 0.72rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 8px; }
   </style>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" crossorigin="anonymous"></script>
 </head>
 <body>
   <div class="wrap">
@@ -226,13 +301,82 @@
 
     <div class="card">
       <h2>Run</h2>
-      <label for="modelName">Hugging Face model id</label>
+      <label for="modelPreset">Quick presets (fills the box below — larger = more RAM/VRAM &amp; disk)</label>
+      <select id="modelPreset" aria-label="Model preset">
+        <option value="">— Custom Hugging Face id —</option>
+        <optgroup label="Tiny (&lt; 200M)">
+          <option value="gpt2" selected>gpt2 (~124M)</option>
+          <option value="distilgpt2">distilgpt2 (~82M)</option>
+          <option value="facebook/opt-125m">facebook/opt-125m (~125M)</option>
+          <option value="EleutherAI/gpt-neo-125M">EleutherAI/gpt-neo-125M (~125M)</option>
+        </optgroup>
+        <optgroup label="Small (200M – 1B)">
+          <option value="EleutherAI/gpt-neo-1.3B">EleutherAI/gpt-neo-1.3B</option>
+          <option value="EleutherAI/gpt-neo-2.7B">EleutherAI/gpt-neo-2.7B</option>
+          <option value="facebook/opt-350m">facebook/opt-350m</option>
+          <option value="facebook/opt-1.3b">facebook/opt-1.3b</option>
+          <option value="Qwen/Qwen2.5-0.5B-Instruct">Qwen/Qwen2.5-0.5B-Instruct</option>
+        </optgroup>
+        <optgroup label="Medium (~1B – 4B)">
+          <option value="TinyLlama/TinyLlama-1.1B-Chat-v1.0">TinyLlama/TinyLlama-1.1B-Chat-v1.0</option>
+          <option value="microsoft/phi-2">microsoft/phi-2 (~2.7B)</option>
+          <option value="microsoft/Phi-3-mini-4k-instruct">microsoft/Phi-3-mini-4k-instruct (~3.8B)</option>
+          <option value="Qwen/Qwen2.5-1.5B-Instruct">Qwen/Qwen2.5-1.5B-Instruct</option>
+          <option value="Qwen/Qwen2.5-3B-Instruct">Qwen/Qwen2.5-3B-Instruct</option>
+          <option value="google/gemma-2-2b-it">google/gemma-2-2b-it</option>
+          <option value="meta-llama/Llama-3.2-1B-Instruct">meta-llama/Llama-3.2-1B-Instruct (gated)</option>
+          <option value="meta-llama/Llama-3.2-3B-Instruct">meta-llama/Llama-3.2-3B-Instruct (gated)</option>
+        </optgroup>
+        <optgroup label="Large (~7B – 9B)">
+          <option value="Qwen/Qwen2.5-7B-Instruct">Qwen/Qwen2.5-7B-Instruct</option>
+          <option value="mistralai/Mistral-7B-v0.1">mistralai/Mistral-7B-v0.1</option>
+          <option value="mistralai/Mistral-7B-Instruct-v0.3">mistralai/Mistral-7B-Instruct-v0.3</option>
+          <option value="microsoft/Phi-3-small-8k-instruct">microsoft/Phi-3-small-8k-instruct (~7B)</option>
+          <option value="google/gemma-2-9b-it">google/gemma-2-9b-it</option>
+          <option value="deepseek-ai/DeepSeek-R1-Distill-Qwen-7B">deepseek-ai/DeepSeek-R1-Distill-Qwen-7B</option>
+          <option value="meta-llama/Meta-Llama-3-8B-Instruct">meta-llama/Meta-Llama-3-8B-Instruct (gated)</option>
+          <option value="meta-llama/Llama-3.1-8B-Instruct">meta-llama/Llama-3.1-8B-Instruct (gated)</option>
+        </optgroup>
+        <optgroup label="Very large (13B+)">
+          <option value="Qwen/Qwen2.5-14B-Instruct">Qwen/Qwen2.5-14B-Instruct</option>
+          <option value="Qwen/Qwen2.5-32B-Instruct">Qwen/Qwen2.5-32B-Instruct</option>
+          <option value="mistralai/Mixtral-8x7B-v0.1">mistralai/Mixtral-8x7B-v0.1 (MoE ~47B total)</option>
+          <option value="meta-llama/Llama-3.1-70B-Instruct">meta-llama/Llama-3.1-70B-Instruct (gated)</option>
+        </optgroup>
+      </select>
+
+      <label for="modelName" style="margin-top:14px">Hugging Face model id (what AutoQuant loads)</label>
       <input type="text" id="modelName" value="gpt2" autocomplete="off">
+
+      <p class="status-line" style="margin-top:10px;font-size:0.84rem;color:var(--muted)">
+        <strong style="color:var(--text)">Ollama vs Hugging Face:</strong> Ollama serves GGUF binaries. This app quantizes
+        <strong>PyTorch checkpoints from Hugging Face</strong>. Enter an Ollama tag below to get a <em>suggested</em> HF id
+        (same family when possible), then estimate size and run.
+      </p>
+      <div class="row" style="margin-top:10px">
+        <div>
+          <label for="ollamaTagForSuggest">Ollama model tag (e.g. phi3, llama3.2, gemma2:2b)</label>
+          <input type="text" id="ollamaTagForSuggest" placeholder="phi3" autocomplete="off">
+        </div>
+        <div style="display:flex;align-items:flex-end">
+          <button type="button" class="btn-secondary" id="ollamaSuggestBtn" style="width:100%;margin:0">Use suggested HF id</button>
+        </div>
+      </div>
+      <p class="status-line" id="ollamaSuggestNote" style="margin-top:8px;font-size:0.8rem;color:var(--muted);display:none"></p>
+
+      <div class="btn-row" style="margin-top:12px">
+        <button type="button" class="btn-secondary" id="estimateBtn" style="flex:1;min-width:160px">Estimate model size</button>
+      </div>
+      <div class="estimate-box" id="estimateBox" style="display:none">
+        <strong>Estimated FP16 footprint:</strong> <span id="estimateGb">—</span> GB
+        · <span id="estimateParams">—</span> parameters (meta estimate; Hugging Face will download weights on first run if missing).
+        <div style="margin-top:8px;font-size:0.8rem">Budget slider max is capped at this size — you cannot set a target above the original footprint.</div>
+      </div>
 
       <div class="row" style="margin-top:14px">
         <div>
           <label for="targetGb">Memory budget (max size after quant, GB)</label>
-          <input type="range" id="targetGb" min="0.08" max="2" step="0.02" value="0.18">
+          <input type="range" id="targetGb" min="0.05" max="2" step="0.02" value="0.18">
           <div class="budget-readout" id="targetReadout">≤ 0.18 GB</div>
         </div>
         <div>
@@ -241,11 +385,74 @@
         </div>
       </div>
 
+      <details class="advanced" id="advDetails">
+        <summary>Advanced options</summary>
+        <div class="inner">
+          <div>
+            <label for="outputDir">Output folder name (single name under project; leave empty for auto)</label>
+            <input type="text" id="outputDir" placeholder="e.g. quantized_model_0" autocomplete="off">
+          </div>
+          <div>
+            <label for="testPrompt">Prompt for “quick test” after run</label>
+            <input type="text" id="testPrompt" value="The future of AI is" autocomplete="off">
+          </div>
+        </div>
+      </details>
+
       <button class="btn" id="runBtn" type="button">Start quantization</button>
       <div class="progress-outer"><div class="progress-inner" id="progressBar"></div></div>
       <p class="status-line" id="statusLine">Idle.</p>
       <p class="status-line" id="detailLine" style="margin-top:4px"></p>
       <div class="err-banner" id="errBanner" style="display:none"></div>
+    </div>
+
+    <div class="card" id="resultsCard" style="display:none">
+      <h2>After quantization — how to test</h2>
+      <p class="status-line" style="margin-top:0">
+        Your weights are saved under the project folder shown below. Testing reloads the <strong>same</strong> Hugging Face architecture,
+        swaps in INT-backed layers where planned, loads <code>pytorch_model.bin</code>, then runs one short <code>generate()</code>.
+      </p>
+      <p class="status-line" id="outPathLine" style="margin-top:10px"></p>
+      <p class="status-line" id="cliHint" style="margin-top:6px"></p>
+      <p class="status-line" id="apiHint" style="margin-top:6px;font-size:0.8rem;color:var(--muted)"></p>
+      <div class="btn-row">
+        <a class="btn-secondary" id="openLabBtn" href="/lab" style="text-decoration:none;text-align:center">Open chat lab</a>
+        <button type="button" class="btn-secondary" id="runEvalBtn">Run quick generation test (API)</button>
+        <button type="button" class="btn-secondary" id="copyCliBtn">Copy CLI command</button>
+      </div>
+      <pre id="evalOut"></pre>
+    </div>
+
+    <div class="card" id="chartsCard" style="display:none">
+      <h2>Visualization &amp; accuracy proxy</h2>
+      <p class="status-line" style="margin-top:0">Bit mix and footprint after quantization. Loss charts appear after you run the calibration loss button (same short text as the server metric — not full benchmark accuracy).</p>
+      <div class="chart-grid">
+        <div class="chart-wrap">
+          <h4>Layers by precision</h4>
+          <canvas id="bitMixChart" height="180"></canvas>
+        </div>
+        <div class="chart-wrap">
+          <h4>Footprint (GB)</h4>
+          <canvas id="sizeChart" height="180"></canvas>
+        </div>
+      </div>
+      <div id="qualityChartSection" style="display:none;margin-top:18px">
+        <h3 style="font-size:0.78rem;text-transform:uppercase;letter-spacing:0.08em;color:var(--muted);margin-bottom:12px">Loss proxy (lower = better next-token fit on calibration string)</h3>
+        <div class="chart-grid">
+          <div class="chart-wrap">
+            <h4>Cross-entropy: FP16 vs quantized</h4>
+            <canvas id="lossProxyChart" height="200"></canvas>
+          </div>
+          <div class="chart-wrap">
+            <h4>Signed Δ loss vs FP16 (%) — up = worse, down = better</h4>
+            <canvas id="lossDeltaChart" height="200"></canvas>
+          </div>
+        </div>
+      </div>
+      <div class="btn-row" style="margin-top:14px">
+        <button type="button" class="btn-secondary" id="qualityBtn">Measure loss proxy &amp; draw accuracy charts</button>
+      </div>
+      <p class="status-line" id="qualityOut" style="margin-top:10px;display:none"></p>
     </div>
 
     <div class="card">
@@ -285,7 +492,35 @@
 
     <div class="card">
       <h2>Log</h2>
+      <div class="btn-row" style="margin-top:0">
+        <button type="button" class="btn-secondary" id="copyLogBtn">Copy log</button>
+      </div>
       <div class="log" id="logBox"></div>
+    </div>
+
+    <div class="card">
+      <h2>Ollama (required for reference chat)</h2>
+      <p class="status-line" style="margin-top:0">
+        The <strong>chat lab</strong> can run a parallel <strong>Ollama</strong> model for comparison. Quantized checkpoints stay in Hugging Face format;
+        Ollama uses its own weights — pull a model below if the list is empty.
+      </p>
+      <div class="row" style="margin-top:12px">
+        <div>
+          <label for="ollamaPullName">Pull model (e.g. llama3.2, phi3, gemma2:2b)</label>
+          <input type="text" id="ollamaPullName" placeholder="llama3.2" autocomplete="off">
+        </div>
+        <div style="display:flex;align-items:flex-end">
+          <button type="button" class="btn-secondary" id="ollamaPullBtn" style="width:100%;margin:0">Pull</button>
+        </div>
+      </div>
+      <p class="status-line" id="ollamaPullStatus" style="margin-top:8px;font-size:0.82rem"></p>
+      <div class="btn-row" style="margin-top:8px">
+        <button type="button" class="btn-secondary" id="ollamaRefreshBtn">Refresh Ollama model list</button>
+        <a class="btn-secondary" id="ollamaDocsLink" href="https://ollama.com" target="_blank" rel="noopener">Ollama website</a>
+        <a class="btn-secondary" href="/lab">Chat lab</a>
+      </div>
+      <ul id="ollamaList" style="margin-top:12px;padding-left:1.2rem;color:var(--text);font-size:0.88rem;line-height:1.5"></ul>
+      <p class="status-line" id="ollamaHint"></p>
     </div>
   </div>
 
@@ -300,6 +535,138 @@
     const $ = (id) => document.getElementById(id);
     const fmt = (n) => n == null || n === "" || Number.isNaN(n) ? "—" :
       (n >= 1e9 ? (n / 1e9).toFixed(2) + "B" : n >= 1e6 ? (n / 1e6).toFixed(2) + "M" : n.toLocaleString());
+
+    let estimatedOriginalGb = null;
+    let bitMixChart = null;
+    let sizeBarChart = null;
+    let lossProxyChart = null;
+    let lossDeltaChart = null;
+
+    function applyBudgetSliderMax() {
+      const el = $("targetGb");
+      const max = estimatedOriginalGb != null && estimatedOriginalGb > 0.05
+        ? Math.min(640, estimatedOriginalGb)
+        : 2;
+      const min = 0.05;
+      el.min = String(min);
+      el.max = String(max);
+      let v = parseFloat(el.value);
+      if (v > max) v = max;
+      if (v < min) v = min;
+      el.value = String(v);
+      $("targetReadout").textContent = "≤ " + parseFloat(el.value).toFixed(2) + " GB (max " + max.toFixed(2) + " GB)";
+    }
+
+    function renderCharts(chartData) {
+      if (!chartData || typeof Chart === "undefined") return;
+      $("chartsCard").style.display = "block";
+      const labels = chartData.bit_labels || [];
+      const counts = chartData.bit_counts || [];
+      const sz = chartData.sizes_gb || {};
+
+      if (bitMixChart) bitMixChart.destroy();
+      if (sizeBarChart) sizeBarChart.destroy();
+
+      const ctx1 = $("bitMixChart").getContext("2d");
+      bitMixChart = new Chart(ctx1, {
+        type: "doughnut",
+        data: {
+          labels,
+          datasets: [{
+            data: counts,
+            backgroundColor: ["#5b8def", "#3ecf8e", "#e8b44c", "#9d7aff", "#f07178", "#7c9fff"],
+          }],
+        },
+        options: { plugins: { legend: { labels: { color: "#9898a8" } } } },
+      });
+
+      const ctx2 = $("sizeChart").getContext("2d");
+      const o = sz.original;
+      const q = sz.quantized != null ? sz.quantized : sz.expected;
+      sizeBarChart = new Chart(ctx2, {
+        type: "bar",
+        data: {
+          labels: ["Original (FP16)", "After quant"],
+          datasets: [{
+            label: "GB",
+            data: [o != null ? o : 0, q != null ? q : 0],
+            backgroundColor: ["#5b8defaa", "#3ecf8eaa"],
+          }],
+        },
+        options: {
+          scales: {
+            x: { ticks: { color: "#9898a8" }, grid: { color: "#2a2a3c" } },
+            y: { ticks: { color: "#9898a8" }, grid: { color: "#2a2a3c" }, beginAtZero: true },
+          },
+          plugins: { legend: { display: false } },
+        },
+      });
+    }
+
+    function renderQualityCharts(qualityJson) {
+      if (typeof Chart === "undefined") return;
+      const cd = qualityJson.chart_data;
+      if (!cd || !cd.loss_bar) return;
+      $("qualityChartSection").style.display = "block";
+      const labels = cd.loss_bar.labels || [];
+      const vals = cd.loss_bar.values || [];
+      if (lossProxyChart) lossProxyChart.destroy();
+      if (lossDeltaChart) lossDeltaChart.destroy();
+      const ctxL = $("lossProxyChart").getContext("2d");
+      lossProxyChart = new Chart(ctxL, {
+        type: "bar",
+        data: {
+          labels,
+          datasets: [{
+            label: "Loss",
+            data: vals,
+            backgroundColor: ["#5b8defcc", "#e8b44ccc"],
+          }],
+        },
+        options: {
+          scales: {
+            x: { ticks: { color: "#9898a8" }, grid: { color: "#2a2a3c" } },
+            y: { ticks: { color: "#9898a8" }, grid: { color: "#2a2a3c" }, beginAtZero: true, title: { display: true, text: "NLL (approx)", color: "#9898a8" } },
+          },
+          plugins: { legend: { display: false } },
+        },
+      });
+      const rel = cd.relative_loss_increase_percent;
+      const ctxD = $("lossDeltaChart").getContext("2d");
+      const dVal = rel != null ? rel : 0;
+      const pad = Math.max(1.5, Math.abs(dVal) * 0.35, 0.5);
+      const yMin = Math.min(0, dVal) - pad;
+      const yMax = Math.max(0, dVal) + pad;
+      let barColor = "#3ecf8ecc";
+      if (dVal > 15) barColor = "#f07178cc";
+      else if (dVal > 5) barColor = "#e8b44ccc";
+      else if (dVal > 0.5) barColor = "#e8b44c99";
+      else if (dVal < -0.5) barColor = "#5b8defcc";
+      lossDeltaChart = new Chart(ctxD, {
+        type: "bar",
+        data: {
+          labels: ["Δ vs FP16"],
+          datasets: [{
+            label: "% vs FP16 (signed)",
+            data: [dVal],
+            backgroundColor: barColor,
+          }],
+        },
+        options: {
+          scales: {
+            x: { ticks: { color: "#9898a8" }, grid: { color: "#2a2a3c" } },
+            y: {
+              min: yMin,
+              max: yMax,
+              ticks: { color: "#9898a8" },
+              grid: { color: "#2a2a3c" },
+              title: { display: true, text: "% (0 = same as FP16)", color: "#9898a8" },
+            },
+          },
+          plugins: { legend: { display: false } },
+        },
+      });
+    }
 
     function renderSteps(currentIndex, doneThrough) {
       const root = $("stepsRoot");
@@ -388,10 +755,55 @@
     }
 
     function renderLog(lines) {
-      $("logBox").textContent = (lines || []).join("\n");
+      const box = $("logBox");
+      box.textContent = (lines || []).join("\n");
+      requestAnimationFrame(() => { box.scrollTop = box.scrollHeight; });
     }
 
     let pollTimer = null;
+    let lastOutputDir = null;
+    let lastEvaluateCli = "";
+
+    function hideResultsCard() {
+      $("resultsCard").style.display = "none";
+      $("evalOut").textContent = "";
+    }
+
+    function showResultsAfterQuant(t) {
+      const dir = t.output_dir || t.detail_line || "";
+      lastOutputDir = dir || null;
+      lastEvaluateCli = t.evaluate_cli || (dir ? `python evaluate.py "${dir}"` : "");
+      $("resultsCard").style.display = "block";
+      $("openLabBtn").href = dir ? `/lab?output_dir=${encodeURIComponent(dir)}` : "/lab";
+      $("outPathLine").innerHTML =
+        dir
+          ? `<strong>Saved folder</strong> (under project root): <code>${dir}</code>`
+          : "Output folder name was not returned; check the log above.";
+      $("cliHint").innerHTML = lastEvaluateCli
+        ? `<strong>CLI</strong> — open a terminal in the project folder and run: <code style="word-break:break-all">${lastEvaluateCli}</code>`
+        : "";
+      $("apiHint").textContent = t.evaluate_api_hint || "";
+      if (t.lab_url) $("openLabBtn").href = t.lab_url;
+      const st = t.stats || {};
+      if (st.chart_data) renderCharts(st.chart_data);
+    }
+
+    async function copyToClipboard(text) {
+      if (!text) return false;
+      try {
+        await navigator.clipboard.writeText(text);
+        return true;
+      } catch (e) {
+        return false;
+      }
+    }
+
+    function flashDetail(msg) {
+      $("detailLine").textContent = msg;
+      setTimeout(() => {
+        if ($("detailLine").textContent === msg) $("detailLine").textContent = "";
+      }, 2200);
+    }
 
     async function pollTask(taskId) {
       const r = await fetch("/api/status/" + taskId);
@@ -416,24 +828,176 @@
         $("runBtn").disabled = false;
         clearInterval(pollTimer);
         pollTimer = null;
+        hideResultsCard();
         return;
       }
       if (t.status === "done") {
         $("runBtn").disabled = false;
         clearInterval(pollTimer);
         pollTimer = null;
+        showResultsAfterQuant(t);
         return;
       }
     }
 
     $("targetGb").addEventListener("input", () => {
       const v = parseFloat($("targetGb").value);
-      $("targetReadout").textContent = "≤ " + v.toFixed(2) + " GB";
+      const max = parseFloat($("targetGb").max);
+      $("targetReadout").textContent = "≤ " + v.toFixed(2) + " GB (max " + max.toFixed(2) + " GB)";
+    });
+
+    $("estimateBtn").addEventListener("click", async () => {
+      const name = $("modelName").value.trim();
+      $("estimateBox").style.display = "none";
+      try {
+        const r = await fetch("/api/model/estimate?model_name=" + encodeURIComponent(name));
+        const j = await r.json();
+        if (!j.ok) {
+          $("estimateBox").style.display = "block";
+          $("estimateGb").textContent = "—";
+          $("estimateParams").textContent = j.error || "failed";
+          return;
+        }
+        estimatedOriginalGb = j.original_size_gb;
+        $("estimateBox").style.display = "block";
+        $("estimateGb").textContent = j.original_size_gb.toFixed(4);
+        $("estimateParams").textContent = fmt(j.total_parameters);
+        applyBudgetSliderMax();
+      } catch (e) {
+        $("estimateBox").style.display = "block";
+        $("estimateGb").textContent = "—";
+        $("estimateParams").textContent = String(e);
+      }
+    });
+
+    $("ollamaSuggestBtn").addEventListener("click", async () => {
+      const tag = ($("ollamaTagForSuggest").value || "").trim();
+      const noteEl = $("ollamaSuggestNote");
+      noteEl.style.display = "block";
+      if (!tag) {
+        noteEl.textContent = "Enter an Ollama tag first (e.g. the name from ollama list).";
+        return;
+      }
+      noteEl.textContent = "Looking up suggested Hugging Face id…";
+      try {
+        const r = await fetch("/api/ollama/suggest-hf?name=" + encodeURIComponent(tag));
+        const j = await r.json();
+        if (!j.ok) {
+          noteEl.textContent = j.error || "Request failed.";
+          return;
+        }
+        if (j.hf_model_id) {
+          $("modelName").value = j.hf_model_id;
+          $("modelPreset").value = "";
+          noteEl.textContent =
+            (j.matched ? "Applied suggested id. " : "No exact map — review id manually. ") +
+            (j.note ? j.note : "");
+        } else {
+          noteEl.textContent = j.note || "No suggestion; enter a Hugging Face id manually.";
+        }
+      } catch (e) {
+        noteEl.textContent = String(e);
+      }
+    });
+
+    $("ollamaPullBtn").addEventListener("click", async () => {
+      const name = ($("ollamaPullName").value || "").trim();
+      $("ollamaPullStatus").textContent = name ? "Pulling… (this can take several minutes)" : "Enter a model name.";
+      if (!name) return;
+      $("ollamaPullBtn").disabled = true;
+      try {
+        const r = await fetch("/api/ollama/pull", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ model: name }),
+        });
+        const j = await r.json();
+        $("ollamaPullStatus").textContent = j.ok
+          ? "Pull finished (" + (j.via || "ok") + "). Refresh the list."
+          : ("Pull failed: " + (j.error || "unknown"));
+        if (j.ok) $("ollamaRefreshBtn").click();
+      } catch (e) {
+        $("ollamaPullStatus").textContent = String(e);
+      } finally {
+        $("ollamaPullBtn").disabled = false;
+      }
+    });
+
+    $("qualityBtn").addEventListener("click", async () => {
+      if (!lastOutputDir) return;
+      $("qualityOut").style.display = "block";
+      $("qualityOut").textContent = "Computing loss proxy (loads FP16 + quantized; may take a minute)…";
+      try {
+        const r = await fetch("/api/metrics/quality", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ output_dir: lastOutputDir }),
+        });
+        const j = await r.json();
+        if (!j.ok) {
+          $("qualityOut").textContent = "Error: " + (j.error || "failed");
+          return;
+        }
+        const rel = j.relative_loss_increase_percent;
+        $("qualityOut").innerHTML =
+          "<strong>Loss proxy</strong> (short calibration string, not full test-set accuracy): " +
+          "FP16 loss " + j.loss_fp16 + ", quantized " + j.loss_quantized +
+          (rel != null ? ", relative increase " + rel + "%" : "") +
+          " · device " + (j.device || "—");
+        if (j.chart_data) renderQualityCharts(j);
+      } catch (e) {
+        $("qualityOut").textContent = String(e);
+      }
+    });
+
+    $("modelPreset").addEventListener("change", () => {
+      const v = $("modelPreset").value;
+      if (v) $("modelName").value = v;
+    });
+    $("modelName").addEventListener("input", () => {
+      const cur = $("modelName").value.trim();
+      const sel = $("modelPreset");
+      if (sel.value && sel.value !== cur) sel.value = "";
+    });
+
+    $("copyLogBtn").addEventListener("click", async () => {
+      const ok = await copyToClipboard($("logBox").textContent || "");
+      flashDetail(ok ? "Log copied to clipboard." : "Log copy failed.");
+    });
+    $("copyCliBtn").addEventListener("click", async () => {
+      const ok = await copyToClipboard(lastEvaluateCli);
+      flashDetail(ok ? "CLI command copied." : "Copy failed.");
+    });
+
+    $("runEvalBtn").addEventListener("click", async () => {
+      if (!lastOutputDir) {
+        $("evalOut").textContent = "No output folder from the last run yet.";
+        return;
+      }
+      $("evalOut").textContent = "Running quick test…";
+      const body = {
+        output_dir: lastOutputDir,
+        prompt: ($("testPrompt").value || "").trim() || "The future of AI is",
+        max_new_tokens: 48,
+        do_sample: false,
+      };
+      try {
+        const r = await fetch("/api/evaluate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        const j = await r.json();
+        $("evalOut").textContent = JSON.stringify(j, null, 2);
+      } catch (e) {
+        $("evalOut").textContent = "Request failed: " + e;
+      }
     });
 
     $("runBtn").addEventListener("click", async () => {
       $("runBtn").disabled = true;
       $("errBanner").style.display = "none";
+      hideResultsCard();
       setProgress(0);
       renderSteps(0, 0);
       renderLog([]);
@@ -445,21 +1009,35 @@
       $("barBefore").style.width = "0%";
       $("barAfter").style.width = "0%";
       $("distCallout").style.display = "none";
+      $("chartsCard").style.display = "none";
+      $("qualityChartSection").style.display = "none";
+      if (lossProxyChart) { lossProxyChart.destroy(); lossProxyChart = null; }
+      if (lossDeltaChart) { lossDeltaChart.destroy(); lossDeltaChart = null; }
 
       const body = {
         model_name: $("modelName").value.trim(),
         target_size_gb: parseFloat($("targetGb").value),
         num_samples: parseInt($("numSamples").value, 10),
       };
+      if (estimatedOriginalGb != null) body.original_size_gb = estimatedOriginalGb;
+      const outOverride = ($("outputDir").value || "").trim();
+      if (outOverride) body.output_dir = outOverride;
+
       const res = await fetch("/api/quantize", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
-      const data = await res.json();
+      let data = {};
+      try {
+        data = await res.json();
+      } catch (e) {
+        data = { error: "Invalid JSON response" };
+      }
       if (!res.ok) {
         $("errBanner").style.display = "block";
-        $("errBanner").textContent = data.error || "Request failed";
+        const extra = res.status === 429 ? " (server busy — only one quantization at a time.)" : "";
+        $("errBanner").textContent = (data.error || "Request failed") + extra;
         $("runBtn").disabled = false;
         return;
       }
@@ -468,8 +1046,38 @@
       pollTask(taskId);
     });
 
+    $("ollamaRefreshBtn").addEventListener("click", async () => {
+      const ul = $("ollamaList");
+      const hint = $("ollamaHint");
+      ul.innerHTML = "";
+      hint.textContent = "Checking local Ollama…";
+      try {
+        const r = await fetch("/api/ollama/models");
+        const j = await r.json();
+        if (j.docs_url) $("ollamaDocsLink").href = j.docs_url;
+        if (!j.reachable) {
+          hint.textContent = (j.hint || "") + (j.error ? " (" + j.error + ")" : "");
+          return;
+        }
+        hint.textContent = j.base_url ? "Connected — " + j.base_url : "Connected.";
+        const names = j.models || [];
+        if (!names.length) {
+          hint.textContent += " No models yet (try: ollama pull llama3.2).";
+          return;
+        }
+        names.forEach((name) => {
+          const li = document.createElement("li");
+          li.textContent = name;
+          ul.appendChild(li);
+        });
+      } catch (e) {
+        hint.textContent = "Request failed: " + e;
+      }
+    });
+
     renderSteps(0, 0);
     refreshGpu();
+    applyBudgetSliderMax();
   </script>
 </body>
 </html>
