@@ -3,10 +3,10 @@ Bit-Width Allocator
 Solves the constrained optimization: maximize model accuracy (proxy: keep
 high-sensitivity layers at high precision) subject to a total memory budget.
 
-Uses a greedy knapsack approach:
-  1. Start all layers at the minimum bit-width (INT4)
-  2. Sort layers by sensitivity score (descending)
-  3. Upgrade layers from INT4 → INT8 → FP16 as long as budget allows
+Greedy knapsack with:
+  - 95% effective budget (headroom for non-quantized footprint estimation)
+  - Sensitivity "cliff" lock: layers clearly below a score gap stay at INT4
+  - INT4 → INT8 → INT16 tiers; INT16 only when sensitivity ≥ INT16_UPGRADE_THRESHOLD
 """
 
 from collections import Counter
@@ -14,6 +14,7 @@ from typing import Dict, Tuple
 
 import torch.nn as nn
 
+from .config import INT16_UPGRADE_THRESHOLD
 from .utils import is_quantizable_weight_module
 
 # Supported bit-widths and their byte sizes per parameter
@@ -27,6 +28,23 @@ def estimate_layer_size_bytes(module: nn.Module, bits: int) -> float:
     return param_count * BYTES_PER_BIT[bits]
 
 
+def _sensitivity_cliff_threshold(scores: list[float]) -> float:
+    """Score boundary below which layers are locked at INT4 (insensitive tail)."""
+    sorted_scores = sorted(scores)
+    if len(sorted_scores) < 2:
+        return 0.0
+    gaps = [
+        sorted_scores[i + 1] - sorted_scores[i]
+        for i in range(len(sorted_scores) - 1)
+    ]
+    median_gap = sorted(gaps)[len(gaps) // 2]
+    cliff = next(
+        (sorted_scores[i + 1] for i, g in enumerate(gaps) if g > 2 * median_gap),
+        0.0,
+    )
+    return float(cliff)
+
+
 def allocate_bits(
     model: nn.Module,
     sensitivity_scores: Dict[str, float],
@@ -35,7 +53,7 @@ def allocate_bits(
     max_bits: int = 16,
 ) -> Tuple[Dict[str, int], float]:
     """
-    Greedy knapsack bit allocation.
+    Greedy knapsack bit allocation with cliff guard, INT8-first path, and 5% budget headroom.
 
     Args:
         model: The loaded model (used to measure layer sizes)
@@ -48,14 +66,14 @@ def allocate_bits(
         (bit_assignments: Dict[layer_name -> bits], expected_size_gb: float)
     """
     _ = max_bits  # reserved for future (e.g. INT2); allocation uses BIT_WIDTH_OPTIONS
-    target_bytes = target_size_gb * (1024**3)
+    effective_budget_bytes = target_size_gb * (1024**3) * 0.95
 
     layer_info: dict = {}
     for name, module in model.named_modules():
         if is_quantizable_weight_module(module) and name in sensitivity_scores:
             layer_info[name] = {
                 "module": module,
-                "sensitivity": sensitivity_scores[name],
+                "sensitivity": float(sensitivity_scores[name]),
                 "size_at_bits": {
                     b: estimate_layer_size_bytes(module, b) for b in BIT_WIDTH_OPTIONS
                 },
@@ -77,27 +95,60 @@ def allocate_bits(
                 non_linear_bytes += param.numel() * 2.0
             non_linear_layers[name] = 16
 
+    score_list = [layer_info[n]["sensitivity"] for n in layer_info]
+    cliff_threshold = _sensitivity_cliff_threshold(score_list)
+
+    locked_int4 = {
+        n for n, info in layer_info.items() if info["sensitivity"] < cliff_threshold
+    }
+
     assignments = {name: min_bits for name in layer_info}
     current_bytes = non_linear_bytes + sum(
         info["size_at_bits"][min_bits] for info in layer_info.values()
     )
 
-    sorted_layers = sorted(
-        layer_info.items(), key=lambda x: x[1]["sensitivity"], reverse=True
+    sorted_names = sorted(
+        layer_info.keys(), key=lambda n: layer_info[n]["sensitivity"], reverse=True
     )
 
-    for bits_target in [8, 16]:
-        for name, info in sorted_layers:
-            if assignments[name] >= bits_target:
+    def _try_upgrade(name: str, target_bits: int) -> bool:
+        nonlocal current_bytes
+        info = layer_info[name]
+        cur = assignments[name]
+        if cur >= target_bits:
+            return False
+        current_size = info["size_at_bits"][cur]
+        new_size = info["size_at_bits"][target_bits]
+        delta = new_size - current_size
+        if current_bytes + delta <= effective_budget_bytes:
+            current_bytes += delta
+            assignments[name] = target_bits
+            return True
+        return False
+
+    # Phase A: INT4 → INT8 (repeat passes until budget exhausted)
+    changed = True
+    while changed:
+        changed = False
+        for name in sorted_names:
+            if name in locked_int4:
                 continue
+            if assignments[name] != 4:
+                continue
+            if _try_upgrade(name, 8):
+                changed = True
 
-            current_size = info["size_at_bits"][assignments[name]]
-            new_size = info["size_at_bits"][bits_target]
-            delta = new_size - current_size
-
-            if current_bytes + delta <= target_bytes:
-                current_bytes += delta
-                assignments[name] = bits_target
+    # Phase B: INT8 → INT16 only for high-sensitivity layers
+    changed = True
+    while changed:
+        changed = False
+        for name in sorted_names:
+            if assignments[name] != 8:
+                continue
+            if layer_info[name]["sensitivity"] < INT16_UPGRADE_THRESHOLD:
+                continue
+            if _try_upgrade(name, 16):
+                changed = True
 
     final_assignments = {**assignments, **non_linear_layers}
 

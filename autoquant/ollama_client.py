@@ -5,7 +5,6 @@ HTTP helpers for a local Ollama daemon (pull, tags, chat).
 from __future__ import annotations
 
 import json
-import os
 import re
 import subprocess
 import sys
@@ -13,9 +12,11 @@ import urllib.error
 import urllib.request
 from typing import Any, Dict, List, Optional, Tuple
 
+from autoquant.config import OLLAMA_HOST
+
 
 def _base_url() -> str:
-    return (os.environ.get("OLLAMA_HOST") or "http://127.0.0.1:11434").rstrip("/")
+    return OLLAMA_HOST
 
 
 def ollama_tags() -> Tuple[bool, List[str], Optional[str]]:

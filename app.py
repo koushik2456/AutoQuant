@@ -1,4 +1,5 @@
 import copy
+import datetime
 import json
 import os
 import shutil
@@ -12,6 +13,8 @@ import torch
 from flask import Flask, jsonify, render_template, request
 
 from autoquant import AutoQuantizer
+from autoquant.config import OLLAMA_HOST
+from autoquant.quantizer import QuantizationCancelled
 from autoquant.api_helpers import sanitize_output_dir, validate_model_name
 from autoquant.hf_estimate import estimate_fp16_footprint_gb
 from autoquant.ollama_client import ollama_chat, ollama_pull
@@ -244,11 +247,20 @@ def metrics_quality():
         max_length = 128
     max_length = max(16, min(max_length, 512))
 
+    try:
+        num_eval_strings = int(data.get("num_eval_strings", 5))
+    except (TypeError, ValueError):
+        num_eval_strings = 5
+    num_eval_strings = max(1, min(num_eval_strings, 32))
+
     from autoquant.quality_metrics import compare_fp16_vs_quantized
 
     with _chat_lock:
         result = compare_fp16_vs_quantized(
-            resolved, calibration_text=text, max_length=max_length
+            resolved,
+            calibration_text=text,
+            max_length=max_length,
+            num_eval_strings=num_eval_strings,
         )
     status = 200 if result.get("ok") else 400
     return jsonify(result), status
@@ -293,7 +305,7 @@ def ollama_models():
     """
     D1 — list tags from a local Ollama daemon (optional). Does not use quantized HF weights.
     """
-    base = (os.environ.get("OLLAMA_HOST") or "http://127.0.0.1:11434").rstrip("/")
+    base = OLLAMA_HOST
     url = f"{base}/api/tags"
     try:
         req = urllib.request.Request(url, method="GET")
@@ -458,6 +470,7 @@ def quantize_api():
         steps=STEP_DEFS,
         stats={},
         log_lines=[],
+        cancel_requested=False,
     )
 
     def log_line(msg: str) -> None:
@@ -470,6 +483,11 @@ def quantize_api():
 
     def job() -> None:
         try:
+            def _raise_if_cancelled() -> None:
+                with task_lock:
+                    if tasks.get(task_id, {}).get("cancel_requested"):
+                        raise QuantizationCancelled()
+
             log_line(
                 f"Device: {gpu['device']}"
                 + (f" ({gpu.get('device_name')})" if gpu.get("device_name") else "")
@@ -543,7 +561,10 @@ def quantize_api():
                 detail_line=f"0 / {num_samples} samples",
             )
 
+            _raise_if_cancelled()
+
             def sens_cb(cur: int, tot: int, _label: str) -> None:
+                _raise_if_cancelled()
                 pct = 15 + int(55 * cur / max(tot, 1))
                 _update_task(
                     task_id,
@@ -555,6 +576,15 @@ def quantize_api():
                 quantizer.analyze_sensitivity(
                     num_samples=num_samples, progress_callback=sens_cb
                 )
+            except QuantizationCancelled:
+                log_line("Quantization cancelled during sensitivity.")
+                _update_task(
+                    task_id,
+                    status="cancelled",
+                    message="Cancelled",
+                    detail_line="",
+                )
+                return
             except Exception as e:
                 log_line(f"Sensitivity failed: {e}")
                 _update_task(
@@ -590,6 +620,8 @@ def quantize_api():
                 message="Solving bit allocation under budget…",
                 progress_percent=72,
             )
+
+            _raise_if_cancelled()
 
             try:
                 cfg_result = quantizer.create_config(target_size_gb)
@@ -655,6 +687,7 @@ def quantize_api():
             )
 
             def q_cb(cur: int, tot: int, layer_name: str) -> None:
+                _raise_if_cancelled()
                 sub = f"{cur} / {tot}: {layer_name}"
                 log_line(sub)
                 pct = 80 + int(18 * cur / max(tot, 1))
@@ -664,10 +697,28 @@ def quantize_api():
                     detail_line=sub,
                 )
 
+            _raise_if_cancelled()
+
+            def _cancel_requested() -> bool:
+                with task_lock:
+                    return bool(tasks.get(task_id, {}).get("cancel_requested"))
+
             try:
                 quantizer.quantize(
-                    cfg_path, resolved_out, progress_callback=q_cb if n_quant else None
+                    cfg_path,
+                    resolved_out,
+                    progress_callback=q_cb if n_quant else None,
+                    cancel_callback=_cancel_requested,
                 )
+            except QuantizationCancelled:
+                log_line("Quantization cancelled during layer replacement.")
+                _update_task(
+                    task_id,
+                    status="cancelled",
+                    message="Cancelled",
+                    detail_line="",
+                )
+                return
             except Exception as e:
                 log_line(f"Quantize/save failed: {e}")
                 _update_task(
@@ -707,6 +758,7 @@ def quantize_api():
                     "quantizable_parameter_count": pstats[
                         "quantizable_parameter_count"
                     ],
+                    "state_dict_warnings": report.get("state_dict_warnings", {}),
                     "chart_data": _chart_payload(
                         {
                             "bit_distribution": final_dist,
@@ -717,6 +769,24 @@ def quantize_api():
                     ),
                 },
             )
+
+            metrics_path = os.path.join(resolved_out, "_metrics.json")
+            with open(metrics_path, "w", encoding="utf-8") as mf:
+                json.dump(
+                    {
+                        "model_name": model_name_norm,
+                        "target_size_gb": target_size_gb,
+                        "actual_size_gb": round(float(report["quantized_size_gb"]), 6),
+                        "num_samples": num_samples,
+                        "bit_distribution": final_dist,
+                        "timestamp": datetime.datetime.now(datetime.timezone.utc)
+                        .isoformat()
+                        .replace("+00:00", "Z"),
+                        "weighted_avg_bits": round(float(avg_bits), 4),
+                    },
+                    mf,
+                    indent=2,
+                )
 
             _update_task(
                 task_id,
@@ -733,6 +803,14 @@ def quantize_api():
                 lab_url=f"/lab?output_dir={output_dir_name}",
                 stats=merged_final,
             )
+        except QuantizationCancelled:
+            log_line("Quantization cancelled.")
+            _update_task(
+                task_id,
+                status="cancelled",
+                message="Cancelled",
+                detail_line="",
+            )
         except Exception as e:
             log_line(f"Error: {e}")
             _update_task(task_id, status="error", error=str(e), message="Failed")
@@ -748,6 +826,15 @@ def quantize_api():
             "message": "Job started. Poll GET /api/status/<task_id> or watch the UI.",
         }
     )
+
+
+@app.route("/api/cancel/<task_id>", methods=["POST"])
+def cancel_task(task_id: str):
+    with task_lock:
+        if task_id in tasks:
+            tasks[task_id]["cancel_requested"] = True
+            return jsonify({"status": "cancel_requested"})
+    return jsonify({"error": "task not found"}), 404
 
 
 @app.route("/api/status/<task_id>")

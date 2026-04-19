@@ -17,22 +17,28 @@ import torch
 import torch.nn as nn
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from autoquant.quantizer import DynamicQuantizedLinear
+from autoquant.config import DEFAULT_GROUP_SIZE
+from autoquant.quantizer import DynamicQuantizedLinear, infer_dynamic_quant_group_size
 from autoquant.utils import as_linear_for_quantize, is_quantizable_weight_module
 
 
 def _generate_kwargs(
     tokenizer: Any,
+    prompt_length: int,
     max_new_tokens: int,
     do_sample: bool,
 ) -> Dict[str, Any]:
-    """Stable defaults: greedy is the default — sampling uses mild temperature/top_p."""
+    """Stable defaults: greedy is the default — sampling uses mild temperature/top_p.
+
+    Uses ``max_length=prompt_length + max_new_tokens`` only (avoids clashing with a
+    model ``generation_config`` that also sets ``max_new_tokens`` / ``max_length``).
+    """
     eos = tokenizer.eos_token_id
     pad = tokenizer.pad_token_id
     if pad is None:
         pad = eos
     kw: Dict[str, Any] = {
-        "max_new_tokens": max_new_tokens,
+        "max_length": int(prompt_length) + int(max_new_tokens),
         "do_sample": do_sample,
         "pad_token_id": pad,
         "eos_token_id": eos,
@@ -43,6 +49,16 @@ def _generate_kwargs(
         kw["temperature"] = 0.7
         kw["top_p"] = 0.92
     return kw
+
+
+def _tokenizer_inputs_for_generate(
+    tokenizer: Any, text: str, device: str
+) -> Dict[str, torch.Tensor]:
+    """Token batch on ``device`` with an explicit ``attention_mask`` (pad==eos safe)."""
+    inputs = tokenizer(text, return_tensors="pt", padding=False)
+    if "attention_mask" not in inputs or inputs["attention_mask"] is None:
+        inputs["attention_mask"] = torch.ones_like(inputs["input_ids"])
+    return {k: v.to(device) for k, v in inputs.items()}
 
 
 def _replace_module_in_model(parent_module, target_name, new_module):
@@ -72,6 +88,26 @@ def _load_quantized_causal_lm(model_path: str) -> Dict[str, Any]:
             quant_config = json.load(f)
         base_model_name = quant_config["model_name"]
 
+        if not quant_config.get("schema_version"):
+            print(
+                "[WARN] quantization_config.json has no schema_version; "
+                "checkpoint may be from an older AutoQuant build."
+            )
+
+        checkpoint_file = os.path.join(model_path, "pytorch_model.bin")
+        if not os.path.isfile(checkpoint_file):
+            out["error"] = f"Missing {checkpoint_file}"
+            return out
+
+        try:
+            state_dict = torch.load(
+                checkpoint_file, map_location="cpu", weights_only=True
+            )
+        except TypeError:
+            state_dict = torch.load(checkpoint_file, map_location="cpu")
+
+        cfg_gs = int(quant_config.get("dynamic_quant_group_size", DEFAULT_GROUP_SIZE))
+
         model = AutoModelForCausalLM.from_pretrained(
             base_model_name,
             torch_dtype=torch.float16,
@@ -89,23 +125,28 @@ def _load_quantized_causal_lm(model_path: str) -> Dict[str, Any]:
                 if module_name == name and is_quantizable_weight_module(child):
                     if bits < 16:
                         lin = as_linear_for_quantize(child)
-                        new_layer = DynamicQuantizedLinear(lin, bits)
+                        gs = infer_dynamic_quant_group_size(
+                            module_name, state_dict, lin.in_features, cfg_gs
+                        )
+                        new_layer = DynamicQuantizedLinear(lin, bits, group_size=gs)
                         _replace_module_in_model(model, module_name, new_layer)
                         replaced_count += 1
                     break
 
-        checkpoint_file = os.path.join(model_path, "pytorch_model.bin")
-        if not os.path.isfile(checkpoint_file):
-            out["error"] = f"Missing {checkpoint_file}"
+        missing_keys: list[str] = []
+        unexpected_keys: list[str] = []
+        try:
+            inc = model.load_state_dict(state_dict, strict=False)
+            missing_keys = list(inc.missing_keys)
+            unexpected_keys = list(inc.unexpected_keys)
+            if missing_keys:
+                print(f"[WARN] Missing keys in state_dict: {missing_keys[:10]}")
+            if unexpected_keys:
+                print(f"[WARN] Unexpected keys in state_dict: {unexpected_keys[:10]}")
+        except Exception as e:
+            out["error"] = f"load_state_dict failed: {e}"
             return out
 
-        try:
-            state_dict = torch.load(
-                checkpoint_file, map_location="cpu", weights_only=True
-            )
-        except TypeError:
-            state_dict = torch.load(checkpoint_file, map_location="cpu")
-        model.load_state_dict(state_dict)
         tokenizer = AutoTokenizer.from_pretrained(model_path)
 
         device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -121,6 +162,10 @@ def _load_quantized_causal_lm(model_path: str) -> Dict[str, Any]:
         out["base_model_name"] = base_model_name
         out["replaced_quantized_layers"] = replaced_count
         out["loaded_size_gb"] = size_gb
+        out["state_dict_warnings"] = {
+            "missing_keys": missing_keys[:10],
+            "unexpected_keys": unexpected_keys[:10],
+        }
         return out
     except Exception as e:
         out["error"] = str(e)
@@ -148,12 +193,12 @@ def chat_quantized(
     if not prompt:
         return {"ok": False, "error": "message is empty"}
 
-    inputs = tokenizer(prompt, return_tensors="pt")
-    inputs = {k: v.to(device) for k, v in inputs.items()}
+    inputs = _tokenizer_inputs_for_generate(tokenizer, prompt, device)
     prompt_len = int(inputs["input_ids"].shape[1])
 
     gen_kw = _generate_kwargs(
         tokenizer,
+        prompt_len,
         max_new_tokens=max(1, min(int(max_new_tokens), 1024)),
         do_sample=do_sample,
     )
@@ -182,6 +227,7 @@ def chat_quantized(
         "elapsed_seconds": round(elapsed, 2),
         "base_model_name": bundle.get("base_model_name"),
         "device": device,
+        "state_dict_warnings": bundle.get("state_dict_warnings", {}),
     }
 
 
@@ -194,6 +240,10 @@ def _estimate_loaded_size_gb(model: nn.Module) -> float:
             total_bytes += dq.scale.numel() * dq.scale.element_size()
             if dq.bias is not None:
                 total_bytes += dq.bias.numel() * dq.bias.element_size()
+            if hasattr(dq, "weight_residual") and dq.weight_residual is not None:
+                total_bytes += (
+                    dq.weight_residual.numel() * dq.weight_residual.element_size()
+                )
         elif isinstance(child, (nn.Linear, nn.Embedding, nn.LayerNorm)):
             for p in child.parameters():
                 total_bytes += p.numel() * p.element_size()
@@ -233,11 +283,12 @@ def run_quick_eval(
         replaced_count = bundle["replaced_quantized_layers"]
         size_gb = bundle["loaded_size_gb"]
 
-        inputs = tokenizer(prompt, return_tensors="pt")
-        inputs = {k: v.to(device) for k, v in inputs.items()}
+        inputs = _tokenizer_inputs_for_generate(tokenizer, prompt, device)
+        prompt_len = int(inputs["input_ids"].shape[1])
 
         gen_kw = _generate_kwargs(
             tokenizer,
+            prompt_len,
             max_new_tokens=max_new_tokens,
             do_sample=do_sample,
         )
@@ -261,6 +312,7 @@ def run_quick_eval(
                 "generated_text": generated,
                 "elapsed_seconds": round(elapsed, 2),
                 "max_new_tokens": max_new_tokens,
+                "state_dict_warnings": bundle.get("state_dict_warnings", {}),
             }
         )
         return out
