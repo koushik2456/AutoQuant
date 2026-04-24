@@ -211,13 +211,40 @@ class AutoQuantizer:
             if progress_callback is not None:
                 progress_callback(cur, tot, "sensitivity")
 
-        self.sensitivity_scores = compute_sensitivity(
-            self.model,
-            self.tokenizer,
-            num_samples,
-            device=self.device,
-            progress_callback=_cb if progress_callback is not None else None,
-        )
+        try:
+            self.sensitivity_scores = compute_sensitivity(
+                self.model,
+                self.tokenizer,
+                num_samples,
+                device=self.device,
+                progress_callback=_cb if progress_callback is not None else None,
+            )
+        except RuntimeError as e:
+            msg = str(e).lower()
+            is_cuda_gemm_error = (
+                "cublas_status_internal_error" in msg
+                or "cuda error" in msg
+                or "cublasgemmex" in msg
+            )
+            if self.device != "cuda" or not is_cuda_gemm_error:
+                raise
+            print(
+                "[WARN] CUDA sensitivity pass failed (cuBLAS). "
+                "Retrying sensitivity on CPU in float32."
+            )
+            cast(nn.Module, self.model).to("cpu")
+            cast(nn.Module, self.model).float()
+            cast(nn.Module, self.model).eval()
+            self.sensitivity_scores = compute_sensitivity(
+                self.model,
+                self.tokenizer,
+                num_samples,
+                device="cpu",
+                progress_callback=_cb if progress_callback is not None else None,
+            )
+            cast(nn.Module, self.model).to(torch.device(self.device))
+            cast(nn.Module, self.model).half()
+            cast(nn.Module, self.model).eval()
         print(f"   Scored {len(self.sensitivity_scores)} layers")
         return self.sensitivity_scores
 

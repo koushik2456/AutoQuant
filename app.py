@@ -857,6 +857,8 @@ if __name__ == "__main__":
         print(f"GPU: {info.get('device_name')}")
     else:
         print("CUDA not active — quantization will use CPU (slower).")
+        if info.get("nvidia_smi_summary"):
+            print(f"Driver probe: {info['nvidia_smi_summary']}")
         if info.get("cuda_hint"):
             print(info["cuda_hint"])
 

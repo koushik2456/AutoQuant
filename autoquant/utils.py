@@ -2,6 +2,9 @@
 Utility functions for size estimation and device detection.
 """
 
+import os
+import shutil
+import subprocess
 from typing import Any, Dict
 
 import torch
@@ -60,11 +63,6 @@ def compute_model_size_gb(model: nn.Module) -> float:
     return total_bytes / (1024**3)
 
 
-def get_device() -> str:
-    """Return 'cuda' if available, else 'cpu'."""
-    return "cuda" if torch.cuda.is_available() else "cpu"
-
-
 def format_size(size_gb: float) -> str:
     """Human-readable size string."""
     if size_gb < 1.0:
@@ -111,6 +109,37 @@ def weighted_average_bits_for_quantizable(
     return (weighted / total_w) if total_w else 16.0
 
 
+def _nvidia_smi_probe() -> Dict[str, Any]:
+    """Best-effort: compare Windows/driver view of the GPU vs what PyTorch sees."""
+    exe = shutil.which("nvidia-smi")
+    if not exe:
+        return {
+            "ok": False,
+            "summary": "nvidia-smi not on PATH — install the NVIDIA display driver (GeForce/Studio).",
+        }
+    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    try:
+        r = subprocess.run(
+            [exe, "--query-gpu=driver_version,name", "--format=csv,noheader", "-i", "0"],
+            capture_output=True,
+            text=True,
+            timeout=8,
+            creationflags=creationflags,
+            check=False,
+        )
+    except Exception as e:
+        return {"ok": False, "summary": f"nvidia-smi failed to run: {e}"}
+    out = (r.stdout or "").strip()
+    err = (r.stderr or "").strip()
+    if r.returncode != 0:
+        msg = err or out or f"exit code {r.returncode}"
+        return {"ok": False, "summary": f"nvidia-smi: {msg}"}
+    line = out.splitlines()[0].strip() if out else ""
+    if not line:
+        return {"ok": False, "summary": "nvidia-smi returned no GPU rows."}
+    return {"ok": True, "summary": line}
+
+
 def gpu_info_dict() -> Dict[str, Any]:
     """
     Device summary for dashboards (prefers CUDA when available).
@@ -130,6 +159,8 @@ def gpu_info_dict() -> Dict[str, Any]:
         "pytorch_built_with_cuda": cuda_in_build,
         "pytorch_cuda_version": getattr(torch.version, "cuda", None),
         "cuda_hint": "",
+        "nvidia_smi_ok": None,
+        "nvidia_smi_summary": None,
     }
 
     if cuda_ok:
@@ -159,15 +190,56 @@ def gpu_info_dict() -> Dict[str, Any]:
             n = torch.cuda.device_count()
         except Exception:
             n = 0
+        smi = _nvidia_smi_probe()
+        out["nvidia_smi_ok"] = smi.get("ok")
+        out["nvidia_smi_summary"] = smi.get("summary")
+        tv = getattr(torch.version, "cuda", None) or "?"
         if n == 0:
-            out["cuda_hint"] = (
-                "PyTorch includes CUDA but no GPU was found. Update NVIDIA drivers, "
-                "plug in a discrete GPU, or avoid Remote Desktop-only sessions that hide the GPU."
-            )
+            if smi.get("ok"):
+                out["cuda_hint"] = (
+                    f"The driver reports a GPU ({smi.get('summary')}), but PyTorch sees zero CUDA devices. "
+                    f"Install the latest NVIDIA driver that supports CUDA {tv} (RTX 50-series / Blackwell: "
+                    "use recent Studio or Game Ready drivers), reboot, then run this app from a local "
+                    "console session—not GPU-restricted remote shells. If you use WSL, install CUDA "
+                    "inside WSL and run Python there, or run native Windows Python."
+                )
+            else:
+                out["cuda_hint"] = (
+                    "PyTorch includes CUDA but no GPU was visible to PyTorch or nvidia-smi. "
+                    f"Details: {smi.get('summary')} "
+                    "Confirm the RTX card appears in Device Manager without errors, install/update "
+                    "drivers from https://www.nvidia.com/Download/index.aspx, avoid policies that block "
+                    "nvidia-smi, and prefer a local logon over RDP-only GPU access."
+                )
         else:
             out["cuda_hint"] = (
                 "CUDA is built in and devices exist but torch.cuda.is_available() is False. "
-                "Check driver/CUDA compatibility or environment variables that disable CUDA."
+                "Check driver/CUDA compatibility or environment variables that disable CUDA "
+                "(e.g. CUDA_VISIBLE_DEVICES)."
             )
 
     return out
+
+
+def get_device() -> str:
+    """
+    Return ``cuda`` when ``torch.cuda.is_available()``, else ``cpu``.
+
+    ``AUTOQUANT_DEVICE`` (optional): ``cpu`` forces CPU. ``cuda`` requires a visible
+    GPU or raises ``RuntimeError`` with diagnostics (no silent CPU fallback).
+    """
+    override = os.environ.get("AUTOQUANT_DEVICE", "").strip().lower()
+    if override == "cpu":
+        return "cpu"
+    if override == "cuda" and not torch.cuda.is_available():
+        diag = gpu_info_dict()
+        lines = [
+            "AUTOQUANT_DEVICE=cuda but CUDA is not usable.",
+            diag.get("cuda_hint") or "",
+        ]
+        if diag.get("nvidia_smi_summary"):
+            lines.append(f"nvidia-smi: {diag['nvidia_smi_summary']}")
+        raise RuntimeError(" ".join(s for s in lines if s).strip())
+    if override == "cuda":
+        return "cuda"
+    return "cuda" if torch.cuda.is_available() else "cpu"
